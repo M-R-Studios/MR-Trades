@@ -1,0 +1,7 @@
+name: MR-Trades
+version: '${project.version}'
+main: com.mrstudios.trades.MRTrades
+api-version: '1.21'
+author: MR Studios
+description: Safe player-to-player trading that works for Java and Bedrock players.
+folia-supported: false
