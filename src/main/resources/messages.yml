@@ -1,0 +1,150 @@
+# MR-Trades messages. MiniMessage format: https://docs.advntr.dev/minimessage/format
+# <prefix> inserts the prefix below into any message. Set a message to "" to send nothing.
+# Each message can only use the placeholders its default uses. To show a tag as plain text,
+# write \< before it inside single quotes, like the help lines below: '/trade \<player>'.
+
+# Do not change. Used to upgrade this file automatically when the plugin updates.
+messages-version: 1
+
+prefix: "<gradient:#22c55e:#0ea5e9>MR-Trades</gradient> <dark_gray>»</dark_gray> "
+
+# Requests
+request-sent: "<prefix><gray>Trade request sent to <white><player></white>."
+request-received: "<prefix><white><player></white> <gray>wants to trade. Type <white>/trade accept <player></white> or <white>/trade deny <player></white>."
+# Shown to Java players under request-received. <accept>...</accept> and <deny>...</deny> make
+# the text between them run /trade accept or /trade deny for that player when clicked.
+request-buttons: "<green><accept>[Accept]</accept></green> <red><deny>[Deny]</deny></red>"
+request-expired-sender: "<prefix><gray>Your trade request to <white><player></white> expired."
+request-expired-target: "<prefix><gray>The trade request from <white><player></white> expired."
+request-denied: "<prefix><white><player></white> <gray>denied your trade request."
+request-denied-self: "<prefix><gray>You denied <white><player></white>'s trade request."
+request-cancelled: "<prefix><gray>You withdrew your trade request."
+request-already-sent: "<prefix><red>You already sent <player> a request."
+no-request: "<prefix><red>You have no trade request from <player>."
+no-requests: "<prefix><red>You have no pending trade requests."
+cooldown: "<prefix><red>Wait <remaining>s before sending another request."
+target-offline: "<prefix><red><player> isn't online."
+target-self: "<prefix><red>You can't trade with yourself."
+target-busy: "<prefix><red><player> is already trading."
+target-toggled: "<prefix><red><player> isn't accepting trade requests."
+self-busy: "<prefix><red>You're already trading."
+too-far: "<prefix><red>You need to be within <distance> blocks of <player>."
+other-world: "<prefix><red><player> is in another world."
+disabled-world: "<prefix><red>Trading is disabled in this world."
+blocked-gamemode: "<prefix><red>You can't trade in <gamemode> mode."
+target-blocked-gamemode: "<prefix><red><player> can't trade in their game mode."
+toggle-off: "<prefix><gray>You no longer receive trade requests."
+toggle-on: "<prefix><gray>You receive trade requests again."
+
+# Trade
+trade-started: "<prefix><gray>Trading with <white><player></white>."
+confirm-locked: "<prefix><yellow><player> just changed their offer. Check it before confirming."
+offer-full: "<prefix><red>Your offer is full."
+inventory-full: "<prefix><red>Your inventory is full."
+countdown: "<prefix><gray>Trading in <white><seconds></white>…"
+trade-complete: "<prefix><green>Trade with <player> complete."
+trade-cancelled: "<prefix><red>Trade cancelled: <reason>"
+complete-failed-space: "<prefix><red><player> doesn't have enough inventory space. Confirm again when there's room."
+complete-failed-money: "<prefix><red><player> doesn't have enough money. Confirm again after changing the offer."
+complete-failed-xp: "<prefix><red><player> doesn't have enough levels. Confirm again after changing the offer."
+economy-unavailable: "<prefix><red>Money trading is unavailable right now. Money offers were set to 0."
+economy-error: "<prefix><red>The economy plugin failed during the trade. Contact staff with trade id <id>."
+
+# Cancel reasons (<reason> above)
+reason-closed: "<player> closed the trade"
+reason-cancelled: "<player> cancelled"
+reason-quit: "<player> left"
+reason-died: "<player> died"
+reason-too-far: "you are too far apart"
+reason-world: "<player> changed world"
+reason-gamemode: "<player> changed game mode"
+reason-server-stop: "the server is stopping"
+reason-admin: "an admin cancelled it"
+reason-lost-view: "the trade window was closed by another plugin"
+
+# Amount input
+input-chat-prompt: "<prefix><gray>Type an amount in chat, or <white><cancel-word></white>. You have <seconds> seconds."
+input-invalid: "<prefix><red>'<input>' isn't a valid amount. Try again or type <cancel-word>."
+input-too-high: "<prefix><red>You can offer at most <max>."
+input-timeout: "<prefix><gray>Amount entry timed out."
+form-money-title: "Money to offer"
+form-xp-title: "XP levels to offer"
+form-request-title: "Trade request"
+form-request-content: "<player> wants to trade with you."
+form-accept: "Accept"
+form-deny: "Deny"
+
+# Returns
+returns-queued: "<prefix><yellow>Your inventory was full. <count> item stack(s) are waiting: /trade claim"
+returns-dropped: "<prefix><yellow>Your inventory was full. <count> item stack(s) were dropped at your feet."
+returns-waiting: "<prefix><yellow>You have <count> item stack(s) waiting: /trade claim"
+returns-claimed: "<prefix><green>Gave you <count> item stack(s). <left> still waiting."
+returns-none: "<prefix><gray>Nothing is waiting for you."
+
+# History
+history-empty: "<prefix><gray>No trades yet."
+history-unknown-player: "<prefix><red>No trades found for <player>."
+history-disabled: "<prefix><red>Trade history is disabled."
+history-loading-failed: "<prefix><red>Couldn't load the trade history. See the console."
+
+# GUI (names and lore; <player>, <amount>, <seconds> where noted)
+gui:
+  trade-title: "Trade with <player>"
+  money-editor-title: "Money to offer"
+  xp-editor-title: "XP levels to offer"
+  history-title: "Trades of <player> (page <page>)"
+  head-you: "<green>You"
+  head-other: "<aqua><player>"
+  head-typing: "<gray>typing an amount…"
+  status-waiting-both: "<gray>Waiting for both players"
+  status-waiting: "<gray>Waiting for <player>"
+  status-countdown: "<green>Trading in <seconds>…"
+  money: "<gold>Money: <amount>"
+  money-click: "<gray>Click to change"
+  xp: "<green>XP levels: <amount>"
+  xp-click: "<gray>Click to change"
+  confirm: "<red>Click to confirm"
+  confirmed: "<green>Confirmed (click to undo)"
+  confirm-locked: "<gray>Offer just changed…"
+  other-confirmed: "<green><player> confirmed"
+  other-not-confirmed: "<red><player> hasn't confirmed"
+  cancel: "<red>Cancel trade"
+  editor-plus: "<green>+<amount>"
+  editor-minus: "<red>-<amount>"
+  editor-current: "<white>Offer: <amount>"
+  editor-type: "<yellow>Type an amount"
+  editor-zero: "<gray>Set to 0"
+  editor-max: "<gray>Offer all (<amount>)"
+  editor-done: "<green>Done"
+  editor-back: "<red>Back"
+  history-entry: "<white>Trade with <player>"
+  history-entry-lore:
+    - "<gray><date>"
+    - "<gray>You gave: <white><gave>"
+    - "<gray>You got: <white><got>"
+  history-prev: "<gray>Previous page"
+  history-next: "<gray>Next page"
+  history-back: "<gray>Back"
+  display-lore: "<dark_gray>Preview"
+
+# Commands
+no-permission: "<prefix><red>You don't have permission to do that."
+player-only: "<prefix><red>Only players can use this command."
+help:
+  - '<prefix><white>/trade \<player></white> <gray>- send a trade request'
+  - "<prefix><white>/trade accept|deny [player]</white> <gray>- answer a request"
+  - "<prefix><white>/trade cancel</white> <gray>- withdraw your request"
+  - "<prefix><white>/trade toggle</white> <gray>- turn requests off or on"
+  - "<prefix><white>/trade claim</white> <gray>- get back items that didn't fit"
+  - "<prefix><white>/trade history</white> <gray>- your past trades"
+admin-help:
+  - "<prefix><white>/mrtrades reload</white> <gray>- reload config.yml and messages.yml"
+  - "<prefix><white>/mrtrades version</white> <gray>- version, hooks and storage"
+  - '<prefix><white>/mrtrades cancel \<player></white> <gray>- end a player''s trade, returning everything'
+version: "<prefix><gray>MR-Trades <white><version></white> on <white><server></white>. Hooks: <white><hooks></white>. Storage: <white><storage></white>"
+admin-cancelled: "<prefix><gray>Cancelled <player>'s trade. Everything was returned."
+admin-not-trading: "<prefix><red><player> isn't trading."
+reload-success: "<prefix><green>Reloaded config.yml and messages.yml."
+reload-warnings: "<prefix><yellow>Reloaded with <count> warning(s):"
+reload-failed: "<prefix><red>Reload failed for <file>; kept the previous settings for it:"
+reload-detail: "<gray> - <detail>"

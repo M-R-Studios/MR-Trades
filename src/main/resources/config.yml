@@ -3,3 +3,146 @@
 
 # Do not change. Used to upgrade this file automatically when the plugin updates.
 config-version: 1
+
+requests:
+  # Seconds before an unanswered trade request expires.
+  timeout-seconds: 30
+  # Seconds a player must wait between sending trade requests. 0 turns it off.
+  # Bypass: mrtrades.bypass.cooldown
+  cooldown-seconds: 5
+  # Send a trade request (or accept one) by sneaking and right-clicking another player.
+  # Also needs mrtrades.trade.sneak.
+  sneak-right-click: true
+  # Add clickable [Accept] and [Deny] buttons to the request message for Java players.
+  # The typed commands are always shown too, so every client can answer.
+  clickable-buttons: true
+
+limits:
+  # Maximum distance in blocks between the two players. Checked when sending and accepting
+  # a request and on a timer during the trade. 0 = no limit.
+  # Walking, bumping into each other or being pushed never cancels a trade; only going
+  # past this distance does. Bypass: mrtrades.bypass.distance (either player)
+  max-distance: 16
+  # How often the distance is checked during a trade, in ticks (20 = 1 second). Range 5-100.
+  distance-check-ticks: 10
+  # Allow trading with a player in another world. When false, a world change cancels the trade.
+  # Bypass: mrtrades.bypass.distance (either player)
+  allow-cross-world: false
+  # Worlds where trading is disabled. World names, case-insensitive.
+  # Bypass: mrtrades.bypass.world
+  disabled-worlds: []
+  # Game modes that can't trade. CREATIVE is blocked by default so items spawned in creative
+  # can't be handed to survival players. Options: SURVIVAL, CREATIVE, ADVENTURE, SPECTATOR.
+  blocked-gamemodes: [CREATIVE, SPECTATOR]
+
+trade:
+  # Seconds counted down after both players confirm before the trade completes.
+  # Any change to either offer during the countdown resets both confirmations. Range 0-10.
+  countdown-seconds: 3
+  # After the other player changes their offer, your confirm button stays locked for this many
+  # milliseconds, so a last-second swap can't be confirmed by accident. 0 turns it off.
+  change-lock-ms: 1000
+
+money:
+  # Allow money in trades. Needs Vault and an economy plugin; ignored without them.
+  enabled: true
+  # Amounts on the +/- buttons in the money editor. Up to 4 values, smallest first.
+  buttons: [1, 10, 100, 1000]
+  # Highest amount a player can offer in one trade. 0 = no limit (only their balance).
+  max-amount: 0
+
+xp:
+  # Allow XP levels in trades.
+  enabled: true
+  # Amounts on the +/- buttons in the XP editor. Up to 4 values, smallest first.
+  buttons: [1, 5, 10, 30]
+
+input:
+  # Seconds a player has to type an amount in chat before the trade window reopens unchanged.
+  chat-timeout-seconds: 30
+  # Typing this word in chat cancels the amount entry.
+  cancel-word: cancel
+
+bedrock:
+  # Use Floodgate (if installed) to detect Bedrock players and show them forms.
+  floodgate: true
+  # Show Bedrock players a pop-up with Accept / Deny when they receive a trade request.
+  request-form: true
+  # Let Bedrock players type money and XP amounts in a pop-up form instead of chat.
+  amount-form: true
+
+returns:
+  # What happens to returned items that don't fit in the owner's inventory.
+  # QUEUE: keep them safe on the player and give them back with /trade claim, on join and on respawn.
+  #        They never despawn.
+  # DROP:  drop them at the owner's feet. Only the owner can pick them up, but they despawn
+  #        after the normal 5 minutes.
+  when-full: QUEUE
+
+history:
+  # Record completed trades and allow /trade history.
+  enabled: true
+  # Delete entries older than this many days. 0 keeps everything.
+  retention-days: 90
+  # Name of this server in the log. Useful on networks sharing one MySQL database.
+  # Empty = "default".
+  server-name: ""
+
+storage:
+  # Where the trade history is stored. SQLITE (a file in the plugin folder) or MYSQL.
+  # Changing this needs a restart. Existing entries are not copied between them.
+  type: SQLITE
+  sqlite:
+    # File name inside plugins/MR-Trades/.
+    file: history.db
+  mysql:
+    host: localhost
+    port: 3306
+    database: mrtrades
+    username: mrtrades
+    password: ""
+    # Prefix for table names, so several servers or plugins can share one database.
+    table-prefix: "mrtrades_"
+    # Maximum open connections. Range 1-20.
+    pool-size: 4
+    # Extra JDBC connection properties.
+    properties:
+      sslMode: PREFERRED
+
+sounds:
+  # Each sound: enabled, sound key (e.g. minecraft:block.note_block.pling), volume (0.0-10.0), pitch (0.5-2.0).
+  request:
+    enabled: true
+    sound: minecraft:entity.experience_orb.pickup
+    volume: 1.0
+    pitch: 1.0
+  open:
+    enabled: true
+    sound: minecraft:block.chest.open
+    volume: 0.8
+    pitch: 1.2
+  change:
+    enabled: true
+    sound: minecraft:ui.button.click
+    volume: 0.5
+    pitch: 1.0
+  confirm:
+    enabled: true
+    sound: minecraft:block.note_block.pling
+    volume: 1.0
+    pitch: 1.5
+  countdown:
+    enabled: true
+    sound: minecraft:block.note_block.hat
+    volume: 1.0
+    pitch: 1.0
+  complete:
+    enabled: true
+    sound: minecraft:entity.player.levelup
+    volume: 1.0
+    pitch: 1.0
+  cancel:
+    enabled: true
+    sound: minecraft:entity.villager.no
+    volume: 1.0
+    pitch: 1.0

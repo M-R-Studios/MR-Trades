@@ -5,3 +5,68 @@ api-version: '1.21'
 author: MR Studios
 description: Safe player-to-player trading that works for Java and Bedrock players.
 folia-supported: false
+softdepend: [Vault, floodgate]
+
+commands:
+  trade:
+    description: Trade with another player.
+    usage: /trade <player|accept|deny|cancel|toggle|claim|history>
+  mrtrades:
+    description: MR-Trades admin commands.
+    usage: /mrtrades [reload|version|cancel <player>]
+    aliases: [mrt]
+    permission: mrtrades.admin
+
+permissions:
+  mrtrades.*:
+    description: All MR-Trades permissions.
+    default: op
+    children:
+      mrtrades.trade: true
+      mrtrades.trade.sneak: true
+      mrtrades.money: true
+      mrtrades.xp: true
+      mrtrades.toggle: true
+      mrtrades.history: true
+      mrtrades.history.others: true
+      mrtrades.bypass.cooldown: true
+      mrtrades.bypass.distance: true
+      mrtrades.bypass.world: true
+      mrtrades.bypass.toggle: true
+      mrtrades.admin: true
+  mrtrades.trade:
+    description: Send, accept and deny trade requests, and trade.
+    default: true
+  mrtrades.trade.sneak:
+    description: Request or accept a trade by sneak-right-clicking a player.
+    default: true
+  mrtrades.money:
+    description: Put money into a trade.
+    default: true
+  mrtrades.xp:
+    description: Put XP levels into a trade.
+    default: true
+  mrtrades.toggle:
+    description: Use /trade toggle to stop or start receiving trade requests.
+    default: true
+  mrtrades.history:
+    description: View your own trade history.
+    default: true
+  mrtrades.history.others:
+    description: View other players' trade history.
+    default: op
+  mrtrades.bypass.cooldown:
+    description: Ignore the cooldown between trade requests.
+    default: op
+  mrtrades.bypass.distance:
+    description: Ignore limits.max-distance and limits.allow-cross-world. Applies if either player has it.
+    default: op
+  mrtrades.bypass.world:
+    description: Trade in worlds listed in limits.disabled-worlds.
+    default: op
+  mrtrades.bypass.toggle:
+    description: Send trade requests to players who turned requests off.
+    default: op
+  mrtrades.admin:
+    description: Use /mrtrades and its subcommands.
+    default: op
