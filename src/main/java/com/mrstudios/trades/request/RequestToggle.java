@@ -1,9 +1,9 @@
 package com.mrstudios.trades.request;
 
+import com.mrstudios.trades.MRTrades;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 import org.bukkit.persistence.PersistentDataType;
-import org.bukkit.plugin.Plugin;
 
 /**
  * {@code /trade toggle}: whether a player turned trade requests off. Stored on the player
@@ -13,8 +13,8 @@ public final class RequestToggle {
 
     private final NamespacedKey key;
 
-    public RequestToggle(Plugin plugin) {
-        this.key = new NamespacedKey(plugin, "requests_off");
+    public RequestToggle() {
+        this.key = new NamespacedKey(MRTrades.NAMESPACE, "requests_off");
     }
 
     public boolean isOff(Player player) {

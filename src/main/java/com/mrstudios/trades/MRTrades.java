@@ -13,7 +13,15 @@ import com.mrstudios.trades.request.CooldownTracker;
 import com.mrstudios.trades.request.RequestManager;
 import com.mrstudios.trades.request.RequestService;
 import com.mrstudios.trades.request.RequestToggle;
+import com.mrstudios.trades.gui.DisplayItems;
+import com.mrstudios.trades.gui.TradeView;
+import com.mrstudios.trades.listener.DisplayGuardListener;
+import com.mrstudios.trades.listener.GuiListener;
+import com.mrstudios.trades.returns.EscrowStore;
+import com.mrstudios.trades.returns.ReturnService;
+import com.mrstudios.trades.trade.EndReason;
 import com.mrstudios.trades.trade.TradeRegistry;
+import com.mrstudios.trades.trade.TradeService;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +41,12 @@ import org.bukkit.plugin.java.JavaPlugin;
 // Not final: MockBukkit subclasses the plugin class in tests.
 public class MRTrades extends JavaPlugin {
 
+    /**
+     * Namespace of every key MR-Trades stores ({@code mrtrades:escrow}, {@code mrtrades:display}...).
+     * Fixed, so it doesn't follow the plugin name ({@code mr-trades}).
+     */
+    public static final String NAMESPACE = "mrtrades";
+
     /** The active settings and messages. Swapped as a whole on reload. */
     public record State(Settings settings, Messages messages) {
     }
@@ -43,8 +57,10 @@ public class MRTrades extends JavaPlugin {
     private Hooks hooks;
     /** Storage is opened once at startup; changing it needs a restart. */
     private Settings.Storage startupStorage;
-    private final TradeRegistry trades = new TradeRegistry();
+    private final TradeRegistry registry = new TradeRegistry();
     private RequestService requests;
+    private ReturnService returns;
+    private TradeService trades;
 
     @Override
     public void onEnable() {
@@ -68,16 +84,25 @@ public class MRTrades extends JavaPlugin {
 
         hooks = new Hooks(getServer().getPluginManager());
         requests = new RequestService(this, new RequestManager(System::currentTimeMillis),
-                new CooldownTracker(System::currentTimeMillis), new RequestToggle(this), trades);
-        getServer().getPluginManager().registerEvents(new LifecycleListener(requests), this);
+                new CooldownTracker(System::currentTimeMillis), new RequestToggle(), registry);
+        returns = new ReturnService(this, new EscrowStore(this));
+        DisplayItems display = new DisplayItems();
+        TradeView view = new TradeView(() -> state.messages(), display,
+                () -> state.settings().trade().countdownSeconds());
+        trades = new TradeService(this, registry, returns, view, display);
+        requests.setTradeService(trades);
+        getServer().getPluginManager().registerEvents(new GuiListener(this, trades), this);
+        getServer().getPluginManager().registerEvents(new LifecycleListener(this, trades, requests, returns), this);
+        getServer().getPluginManager().registerEvents(new DisplayGuardListener(display, getLogger()), this);
         getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
+        trades.startTasks();
 
         PluginCommand adminCommand = Objects.requireNonNull(getCommand("mrtrades"));
         AdminCommand admin = new AdminCommand(this);
         adminCommand.setExecutor(admin);
         adminCommand.setTabCompleter(admin);
         PluginCommand tradeCommand = Objects.requireNonNull(getCommand("trade"));
-        TradeCommand trade = new TradeCommand(this, requests);
+        TradeCommand trade = new TradeCommand(this, requests, trades, returns);
         tradeCommand.setExecutor(trade);
         tradeCommand.setTabCompleter(trade);
         updatePermissionMessage();
@@ -87,6 +112,11 @@ public class MRTrades extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // Players are still online here (also on /stop), so every offer goes back into its
+        // owner's inventory before player data is saved.
+        if (trades != null) {
+            trades.abortAll(EndReason.SERVER_STOP);
+        }
     }
 
     public State state() {
@@ -101,7 +131,11 @@ public class MRTrades extends JavaPlugin {
         return requests;
     }
 
-    public TradeRegistry trades() {
+    public ReturnService returnsService() {
+        return returns;
+    }
+
+    public TradeService trades() {
         return trades;
     }
 
@@ -122,6 +156,8 @@ public class MRTrades extends JavaPlugin {
                 files.messages.ok() ? files.messages.value() : old.messages());
         state = updated;
         updatePermissionMessage();
+        // Live trades keep running; new limits apply from the next check.
+        trades.startTasks();
 
         Messages messages = updated.messages();
         List<String> warnings = files.warnings();

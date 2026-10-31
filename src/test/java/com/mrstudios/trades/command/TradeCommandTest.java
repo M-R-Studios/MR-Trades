@@ -112,7 +112,8 @@ class TradeCommandTest {
         sam.performCommand("trade accept");
 
         assertEquals(0, pending());
-        assertEquals(List.of(), drain(sam), "nothing opens yet in step 3");
+        assertEquals(List.of("MR-Trades » Trading with Alex."), drain(sam));
+        assertTrue(plugin.trades().registry().isTrading(alex.getUniqueId()));
     }
 
     @Test
@@ -139,7 +140,7 @@ class TradeCommandTest {
         sam.performCommand("trade Alex");
 
         assertEquals(0, pending());
-        assertEquals(List.of(), drain(alex), "no second request was sent");
+        assertEquals(List.of("MR-Trades » Trading with Sam."), drain(alex), "no second request, a trade");
     }
 
     @Test

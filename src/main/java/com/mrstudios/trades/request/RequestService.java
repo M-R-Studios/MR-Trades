@@ -8,6 +8,7 @@ import com.mrstudios.trades.request.RequestChecks.Denial;
 import com.mrstudios.trades.request.RequestChecks.Party;
 import com.mrstudios.trades.rules.LimitsCheck.Position;
 import com.mrstudios.trades.trade.TradeRegistry;
+import com.mrstudios.trades.trade.TradeService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,7 @@ public final class RequestService {
     private final CooldownTracker cooldowns;
     private final RequestToggle toggle;
     private final TradeRegistry trades;
+    private TradeService tradeService;
 
     public RequestService(MRTrades plugin, RequestManager requests, CooldownTracker cooldowns, RequestToggle toggle,
             TradeRegistry trades) {
@@ -44,6 +46,11 @@ public final class RequestService {
         this.cooldowns = cooldowns;
         this.toggle = toggle;
         this.trades = trades;
+    }
+
+    /** Set once the trade service exists (it's built after this service). */
+    public void setTradeService(TradeService tradeService) {
+        this.tradeService = tradeService;
     }
 
     public RequestManager requests() {
@@ -125,10 +132,10 @@ public final class RequestService {
             send(accepter, denial);
             return;
         }
-        requests.remove(request);
-        // The trade window arrives in step 4 (DESIGN.md section 9).
-        plugin.getLogger().info("Trade request accepted: would start a trade between " + requester.getName()
-                + " and " + accepter.getName() + ".");
+        // Both players are busy from now on: their other requests, both ways, are dropped.
+        requests.removeAllOf(requester.getUniqueId());
+        requests.removeAllOf(accepter.getUniqueId());
+        tradeService.start(requester, accepter);
     }
 
     /** {@code /trade deny [name]}. */

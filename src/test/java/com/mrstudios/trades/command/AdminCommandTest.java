@@ -165,6 +165,6 @@ class AdminCommandTest {
     @Test
     void tabCompletesSubcommands() {
         assertEquals(List.of("reload"), server.getCommandTabComplete(admin, "mrtrades re"));
-        assertEquals(List.of("reload", "version"), server.getCommandTabComplete(admin, "mrtrades "));
+        assertEquals(List.of("reload", "version", "cancel"), server.getCommandTabComplete(admin, "mrtrades "));
     }
 }
