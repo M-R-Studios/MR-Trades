@@ -1,12 +1,19 @@
 package com.mrstudios.trades;
 
 import com.mrstudios.trades.command.AdminCommand;
+import com.mrstudios.trades.command.TradeCommand;
 import com.mrstudios.trades.config.LoadResult;
 import com.mrstudios.trades.config.Messages;
 import com.mrstudios.trades.config.MessagesLoader;
 import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.config.SettingsLoader;
 import com.mrstudios.trades.hook.Hooks;
+import com.mrstudios.trades.listener.LifecycleListener;
+import com.mrstudios.trades.request.CooldownTracker;
+import com.mrstudios.trades.request.RequestManager;
+import com.mrstudios.trades.request.RequestService;
+import com.mrstudios.trades.request.RequestToggle;
+import com.mrstudios.trades.trade.TradeRegistry;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,6 +43,8 @@ public class MRTrades extends JavaPlugin {
     private Hooks hooks;
     /** Storage is opened once at startup; changing it needs a restart. */
     private Settings.Storage startupStorage;
+    private final TradeRegistry trades = new TradeRegistry();
+    private RequestService requests;
 
     @Override
     public void onEnable() {
@@ -58,11 +67,19 @@ public class MRTrades extends JavaPlugin {
         }
 
         hooks = new Hooks(getServer().getPluginManager());
+        requests = new RequestService(this, new RequestManager(System::currentTimeMillis),
+                new CooldownTracker(System::currentTimeMillis), new RequestToggle(this), trades);
+        getServer().getPluginManager().registerEvents(new LifecycleListener(requests), this);
+        getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
 
         PluginCommand adminCommand = Objects.requireNonNull(getCommand("mrtrades"));
         AdminCommand admin = new AdminCommand(this);
         adminCommand.setExecutor(admin);
         adminCommand.setTabCompleter(admin);
+        PluginCommand tradeCommand = Objects.requireNonNull(getCommand("trade"));
+        TradeCommand trade = new TradeCommand(this, requests);
+        tradeCommand.setExecutor(trade);
+        tradeCommand.setTabCompleter(trade);
         updatePermissionMessage();
 
         getLogger().info("MR-Trades " + getPluginMeta().getVersion() + " enabled.");
@@ -78,6 +95,14 @@ public class MRTrades extends JavaPlugin {
 
     public Hooks hooks() {
         return hooks;
+    }
+
+    public RequestService requests() {
+        return requests;
+    }
+
+    public TradeRegistry trades() {
+        return trades;
     }
 
     /** The storage settings MR-Trades started with, which stay in use until a restart. */
