@@ -16,13 +16,17 @@ import java.util.Set;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerGameModeChangeEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
@@ -69,6 +73,10 @@ public final class LifecycleListener implements Listener {
         if (view == ViewState.INPUT_CHAT || view == ViewState.INPUT_FORM || view == ViewState.REOPENING) {
             return;
         }
+        if (event.getReason() == InventoryCloseEvent.Reason.PLAYER && trades.isStrayClose(player)) {
+            trades.recoverStrayClose(player, session, side);
+            return;
+        }
         trades.abort(session, EndReason.CLOSED, player.getUniqueId(), Set.of());
     }
 
@@ -89,6 +97,27 @@ public final class LifecycleListener implements Listener {
             trades.editorClosed(player, editor);
         } else {
             trades.abort(editor.session(), EndReason.CLOSED, player.getUniqueId(), Set.of());
+        }
+    }
+
+    /**
+     * While trading, right-clicking blocks and entities does nothing. A Bedrock tap that lands
+     * while a window is closing or not yet shown goes "through" to the world; if it opened a chest
+     * or shulker box, that window would replace the trade window and end the trade. Nobody in a
+     * trade window means to open something else, so nothing legitimate is lost.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInteract(PlayerInteractEvent event) {
+        if (event.getAction() == Action.RIGHT_CLICK_BLOCK && trades.registry().isTrading(event.getPlayer().getUniqueId())) {
+            event.setUseInteractedBlock(Event.Result.DENY);
+            event.setUseItemInHand(Event.Result.DENY);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInteractEntity(PlayerInteractEntityEvent event) {
+        if (trades.registry().isTrading(event.getPlayer().getUniqueId())) {
+            event.setCancelled(true);
         }
     }
 

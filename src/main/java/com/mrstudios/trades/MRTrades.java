@@ -15,6 +15,8 @@ import com.mrstudios.trades.request.RequestService;
 import com.mrstudios.trades.request.RequestToggle;
 import com.mrstudios.trades.gui.DisplayItems;
 import com.mrstudios.trades.gui.TradeView;
+import com.mrstudios.trades.input.ChatInput;
+import com.mrstudios.trades.listener.ChatListener;
 import com.mrstudios.trades.listener.DisplayGuardListener;
 import com.mrstudios.trades.listener.EconomyListener;
 import com.mrstudios.trades.listener.GuiListener;
@@ -92,12 +94,14 @@ public class MRTrades extends JavaPlugin {
         DisplayItems display = new DisplayItems();
         TradeView view = new TradeView(() -> state.messages(), display, () -> state.settings(), hooks::economy,
                 id -> hasPermission(id, "mrtrades.xp"), id -> hasPermission(id, "mrtrades.money"));
-        trades = new TradeService(this, registry, returns, view, display, hooks::economy);
+        ChatInput chatInput = new ChatInput();
+        trades = new TradeService(this, registry, returns, view, display, hooks::economy, hooks::bedrock, chatInput);
         requests.setTradeService(trades);
         getServer().getPluginManager().registerEvents(new GuiListener(this, trades), this);
         getServer().getPluginManager().registerEvents(new LifecycleListener(this, trades, requests, returns), this);
         getServer().getPluginManager().registerEvents(new DisplayGuardListener(display, getLogger()), this);
         getServer().getPluginManager().registerEvents(new EconomyListener(this, trades), this);
+        getServer().getPluginManager().registerEvents(new ChatListener(this, chatInput, trades), this);
         getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
         trades.startTasks();
 

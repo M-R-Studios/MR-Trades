@@ -8,7 +8,10 @@ import com.mrstudios.trades.gui.DisplayItems;
 import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.gui.TradeView;
+import com.mrstudios.trades.hook.BedrockForms;
 import com.mrstudios.trades.hook.EconomyPort;
+import com.mrstudios.trades.input.AmountParser;
+import com.mrstudios.trades.input.ChatInput;
 import com.mrstudios.trades.returns.PlayerStorage;
 import com.mrstudios.trades.returns.ReturnService;
 import com.mrstudios.trades.rules.ClickAction;
@@ -27,6 +30,7 @@ import java.util.function.Supplier;
 import java.util.logging.Level;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -54,18 +58,35 @@ public final class TradeService {
     /** Items whose owner was somehow offline when returned; queued for them on join. Should stay empty. */
     private final Map<UUID, List<ItemStack>> orphans = new HashMap<>();
     private final Supplier<EconomyPort> economy;
+    private final Supplier<BedrockForms> bedrock;
+    private final ChatInput input;
+    /**
+     * Bedrock clients (through Geyser) close their old screen when the server swaps one window for
+     * another, and that "closed" arrives after the new window is open; the server then closes the
+     * new one. So for Bedrock players a switch is: close, wait this many ticks, then open.
+     */
+    static final int BEDROCK_SWITCH_TICKS = 4;
+    /** A Bedrock "closed" this soon after the plugin opened a window is taken as stray. */
+    static final int STRAY_CLOSE_TICKS = 6;
+    /** At most this many stray closes are absorbed in a row; after that a close is real. */
+    private static final int MAX_STRAY_CLOSES = 2;
+    /** Tick the plugin last opened a trade window or editor for each player. */
+    private final Map<UUID, Integer> openedAt = new HashMap<>();
+    private final Map<UUID, Integer> strayCloses = new HashMap<>();
     private BukkitTask limitsTask;
     private BukkitTask watchdogTask;
     private boolean shuttingDown;
 
     public TradeService(MRTrades plugin, TradeRegistry registry, ReturnService returns, TradeView view,
-            DisplayItems display, Supplier<EconomyPort> economy) {
+            DisplayItems display, Supplier<EconomyPort> economy, Supplier<BedrockForms> bedrock, ChatInput input) {
         this.plugin = plugin;
         this.registry = registry;
         this.returns = returns;
         this.view = view;
         this.display = display;
         this.economy = economy;
+        this.bedrock = bedrock;
+        this.input = input;
     }
 
     public TradeRegistry registry() {
@@ -113,7 +134,7 @@ public final class TradeService {
         for (Side side : List.of(session.a(), session.b())) {
             Player player = player(side);
             side.setView(ViewState.TRADE);
-            player.openInventory(view.create(session, side).getInventory());
+            opened(player, view.create(session, side).getInventory());
             messages().send(player, "trade-started", Placeholder.unparsed("player", session.other(side).name()));
             play(player, settings().sounds().open());
         }
@@ -517,18 +538,20 @@ public final class TradeService {
     /** Clears your own confirmation and swaps the window for the editor next tick. */
     private void openEditor(Player player, TradeSession session, Side side, EditorHolder.Kind kind) {
         boolean shown = kind == EditorHolder.Kind.XP ? view.xpShown(side) : view.moneyShown(side);
-        if (!session.acceptsChanges() || !shown) {
+        // Only from the trade window: a second tap before the editor opens must not open it twice
+        // (the second open would close the first editor and end the trade).
+        if (!session.acceptsChanges() || !shown || side.view() != ViewState.TRADE) {
             return;
         }
         session.clearConfirmation(side);
         // Set before the window changes, so the close of the trade window isn't taken as Esc.
         side.setView(ViewState.REOPENING);
         render(session);
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            if (session.isEnded() || !player.isOnline()) {
+        switchWindow(player, () -> {
+            if (session.isEnded() || !player.isOnline() || side.view() != ViewState.REOPENING) {
                 return;
             }
-            player.openInventory(view.createEditor(session, side, kind, editorMax(player, kind)).getInventory());
+            opened(player, view.createEditor(session, side, kind, editorMax(player, kind)).getInventory());
             side.setView(ViewState.EDITOR);
         });
     }
@@ -537,7 +560,9 @@ public final class TradeService {
     public void editorPress(Player player, EditorHolder editor, ClickAction.Press press) {
         TradeSession session = editor.session();
         Side side = editor.side();
-        if (session.isEnded()) {
+        // After Back, Done or "Type an amount" the editor is on its way out: further taps (a quick
+        // double tap) are ignored, or they'd queue a second window switch that ends the trade.
+        if (session.isEnded() || side.view() != ViewState.EDITOR) {
             return;
         }
         BigDecimal max = editorMax(player, editor.kind());
@@ -564,8 +589,12 @@ public final class TradeService {
                 reopenTrade(player, session, side);
                 return;
             }
+            case EDITOR_TYPE -> {
+                startInput(player, editor, max);
+                return;
+            }
             default -> {
-                return; // "Type an amount" arrives in step 7.
+                return;
             }
         }
         editor.setDraft(draft.max(BigDecimal.ZERO).min(max));
@@ -588,13 +617,218 @@ public final class TradeService {
         }
     }
 
-    private void reopenTrade(Player player, TradeSession session, Side side) {
-        side.setView(ViewState.REOPENING);
+    // --- Typed amounts: chat and Bedrock forms (DESIGN.md 4.2) ---
+
+    /**
+     * "Type an amount": the window closes and the player types in chat, or (Bedrock with
+     * Floodgate and {@code bedrock.amount-form}) answers a form. The view state is set first, so
+     * the close isn't taken as Esc. The trade stays live the whole time.
+     */
+    private void startInput(Player player, EditorHolder editor, BigDecimal max) {
+        TradeSession session = editor.session();
+        Side side = editor.side();
+        BedrockForms forms = bedrockForms(player, settings().bedrock().amountForm());
+        boolean form = forms != null;
+        side.setView(form ? ViewState.INPUT_FORM : ViewState.INPUT_CHAT);
+        UUID token = UUID.randomUUID();
+        int seconds = settings().input().chatTimeoutSeconds();
+        BukkitTask timeout = Bukkit.getScheduler().runTaskLater(plugin, () -> inputTimedOut(player, token),
+                seconds * 20L);
+        input.start(player.getUniqueId(),
+                new ChatInput.Pending(session, side, editor.kind(), token, form, timeout::cancel));
+        render(session);
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (session.isEnded() || !player.isOnline()) {
+            if (input.get(player.getUniqueId()) == null || !player.isOnline()) {
                 return;
             }
-            player.openInventory(view.create(session, side).getInventory());
+            player.closeInventory(InventoryCloseEvent.Reason.PLUGIN);
+            if (form && sendAmountForm(forms, player, editor.kind(), side, max, token)) {
+                return;
+            }
+            if (form) {
+                // The form couldn't be sent: fall back to chat, which works for everyone.
+                side.setView(ViewState.INPUT_CHAT);
+                input.switchToChat(player.getUniqueId(), token);
+            }
+            messages().send(player, "input-chat-prompt",
+                    Placeholder.unparsed("cancel-word", settings().input().cancelWord()),
+                    Placeholder.unparsed("seconds", String.valueOf(seconds)));
+        });
+    }
+
+    private boolean sendAmountForm(BedrockForms forms, Player player, EditorHolder.Kind kind, Side side,
+            BigDecimal max, UUID token) {
+        UUID id = player.getUniqueId();
+        Runnable closed = () -> Bukkit.getScheduler().runTask(plugin, () -> inputCancelled(player, token));
+        if (kind == EditorHolder.Kind.XP) {
+            String title = plain("form-xp-title");
+            return forms.sendSlider(id, title, title, max.intValue(), side.offer().xpLevels(),
+                    levels -> Bukkit.getScheduler().runTask(plugin, () -> typedAmount(player, token,
+                            String.valueOf(levels), true)), closed);
+        }
+        String title = plain("form-money-title");
+        return forms.sendInput(id, title, title, side.offer().money().toPlainString(),
+                text -> Bukkit.getScheduler().runTask(plugin, () -> typedAmount(player, token, text, true)), closed);
+    }
+
+    /** A chat message from a player who is typing an amount (main thread). */
+    public void chatAmount(Player player, String text) {
+        ChatInput.Pending wait = input.get(player.getUniqueId());
+        if (wait != null && !wait.form()) {
+            typedAmount(player, wait.token(), text, false);
+        }
+    }
+
+    /**
+     * Handles typed text for the wait with {@code token}. Chat: an invalid amount keeps waiting
+     * with an error. Form: anything invalid reopens the window unchanged.
+     */
+    private void typedAmount(Player player, UUID token, String text, boolean fromForm) {
+        ChatInput.Pending wait = input.get(player.getUniqueId());
+        if (wait == null || !wait.token().equals(token) || wait.session().isEnded()) {
+            return; // A late answer: timed out, cancelled or the trade ended.
+        }
+        String typed = text.strip();
+        String cancelWord = settings().input().cancelWord();
+        if (typed.equalsIgnoreCase(cancelWord)) {
+            inputCancelled(player, token);
+            return;
+        }
+        boolean money = wait.kind() == EditorHolder.Kind.MONEY;
+        BigDecimal max = editorMax(player, wait.kind());
+        AmountParser.Result result;
+        if (typed.equalsIgnoreCase("all")) {
+            result = new AmountParser.Valid(max);
+        } else if (money) {
+            EconomyPort port = economy.get();
+            result = AmountParser.parseMoney(typed, port == null ? -1 : port.fractionalDigits(), max);
+        } else {
+            result = AmountParser.parseXp(typed, max.intValue());
+        }
+        switch (result) {
+            case AmountParser.Valid valid -> {
+                if (input.finish(player.getUniqueId(), token) == null) {
+                    return;
+                }
+                long lockMs = settings().trade().changeLockMs();
+                TradeSession session = wait.session();
+                TradeSession.ChangeResult change = money
+                        ? session.setMoney(wait.side(), lockMs, moneyAmount(valid.amount()))
+                        : session.setXpLevels(wait.side(), lockMs, valid.amount().intValue());
+                if (change == TradeSession.ChangeResult.CHANGED) {
+                    offerChanged(session, wait.side());
+                }
+                reopenTrade(player, session, wait.side());
+            }
+            case AmountParser.TooHigh tooHigh -> {
+                messages().send(player, "input-too-high", Placeholder.unparsed("max",
+                        money ? view.formatMoney(tooHigh.max()) : tooHigh.max().toPlainString()));
+                if (fromForm) {
+                    inputCancelled(player, token);
+                }
+            }
+            case AmountParser.Invalid invalid -> {
+                messages().send(player, "input-invalid", Placeholder.unparsed("input", invalid.input()),
+                        Placeholder.unparsed("cancel-word", cancelWord));
+                if (fromForm) {
+                    inputCancelled(player, token);
+                }
+            }
+        }
+    }
+
+    /** The cancel word, or a closed form: back to the trade window, offer unchanged. */
+    private void inputCancelled(Player player, UUID token) {
+        ChatInput.Pending wait = input.finish(player.getUniqueId(), token);
+        if (wait != null && !wait.session().isEnded()) {
+            reopenTrade(player, wait.session(), wait.side());
+        }
+    }
+
+    private void inputTimedOut(Player player, UUID token) {
+        ChatInput.Pending wait = input.finish(player.getUniqueId(), token);
+        if (wait != null && !wait.session().isEnded()) {
+            messages().send(player, "input-timeout");
+            reopenTrade(player, wait.session(), wait.side());
+        }
+    }
+
+    /** Floodgate's forms for {@code player} if they're on Bedrock and forms are on, else null. */
+    public BedrockForms bedrockForms(Player player, boolean formSetting) {
+        BedrockForms forms = bedrock.get();
+        if (forms == null || !formSetting || !settings().bedrock().floodgate()) {
+            return null;
+        }
+        return forms.isBedrock(player.getUniqueId()) ? forms : null;
+    }
+
+    /** A message rendered to plain text, for Bedrock forms (they don't take Adventure components). */
+    private String plain(String key) {
+        return PlainTextComponentSerializer.plainText().serialize(messages().component(key));
+    }
+
+    /**
+     * Swaps the player's window: next tick for Java players; for Bedrock players the current
+     * window closes next tick and {@code open} runs {@link #BEDROCK_SWITCH_TICKS} after that.
+     * The caller has already set the side's view to REOPENING or an input state, so the close is
+     * never taken as the player's.
+     */
+    private void switchWindow(Player player, Runnable open) {
+        if (!isBedrock(player)) {
+            Bukkit.getScheduler().runTask(plugin, open);
+            return;
+        }
+        // Never close inside an inventory event (we're usually in a click handler): next tick.
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            player.closeInventory(InventoryCloseEvent.Reason.PLUGIN);
+            Bukkit.getScheduler().runTaskLater(plugin, open, BEDROCK_SWITCH_TICKS);
+        });
+    }
+
+    /** Opens one of our windows and remembers when, for {@link #isStrayClose}. */
+    private void opened(Player player, Inventory inventory) {
+        player.openInventory(inventory);
+        openedAt.put(player.getUniqueId(), Bukkit.getCurrentTick());
+    }
+
+    /** Whether Floodgate says {@code player} is on Bedrock (and Floodgate use is on). */
+    public boolean isBedrock(Player player) {
+        BedrockForms forms = bedrock.get();
+        return forms != null && settings().bedrock().floodgate() && forms.isBedrock(player.getUniqueId());
+    }
+
+    /**
+     * Whether a "player closed the window" right now is a Bedrock client's late close of the
+     * previous screen rather than the player's: it comes within {@link #STRAY_CLOSE_TICKS} of the
+     * plugin opening a window. Counted, so a client that really keeps closing still gets out.
+     */
+    public boolean isStrayClose(Player player) {
+        Integer at = openedAt.get(player.getUniqueId());
+        if (at == null || !isBedrock(player) || Bukkit.getCurrentTick() - at > STRAY_CLOSE_TICKS) {
+            strayCloses.remove(player.getUniqueId());
+            return false;
+        }
+        int count = strayCloses.merge(player.getUniqueId(), 1, Integer::sum);
+        return count <= MAX_STRAY_CLOSES;
+    }
+
+    /** A stray close of the trade window: the trade goes on and the window comes back. */
+    public void recoverStrayClose(Player player, TradeSession session, Side side) {
+        plugin.getLogger().fine("Ignored a stray window close from " + player.getName() + " (Bedrock); reopening.");
+        reopenTrade(player, session, side);
+    }
+
+    private void reopenTrade(Player player, TradeSession session, Side side) {
+        side.setView(ViewState.REOPENING);
+        switchWindow(player, () -> {
+            // Only the first queued switch runs; anything that happened since wins.
+            if (session.isEnded() || !player.isOnline() || side.view() != ViewState.REOPENING) {
+                return;
+            }
+            opened(player, view.create(session, side).getInventory());
             side.setView(ViewState.TRADE);
             render(session);
         });
@@ -666,6 +900,12 @@ public final class TradeService {
             }
         } finally {
             registry.remove(session);
+            input.clear(session.a().playerId());
+            input.clear(session.b().playerId());
+            for (UUID id : List.of(session.a().playerId(), session.b().playerId())) {
+                openedAt.remove(id);
+                strayCloses.remove(id);
+            }
             for (Side side : List.of(session.a(), session.b())) {
                 Player player = player(side);
                 if (player != null) {

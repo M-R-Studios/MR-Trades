@@ -6,6 +6,7 @@ import com.mrstudios.trades.hook.EconomyPort;
 import com.mrstudios.trades.trade.Side;
 import com.mrstudios.trades.trade.TradeSession;
 import com.mrstudios.trades.trade.TradeState;
+import com.mrstudios.trades.trade.ViewState;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.List;
@@ -20,6 +21,7 @@ import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
 /**
@@ -106,6 +108,12 @@ public final class TradeView {
 
         contents[GuiLayout.OWN_HEAD] = head(own, m.component("gui.head-you", player(own.name())));
         contents[GuiLayout.OTHER_HEAD] = head(other, m.component("gui.head-other", player(other.name())));
+        boolean typing = other.view() == ViewState.INPUT_CHAT || other.view() == ViewState.INPUT_FORM;
+        if (typing) {
+            ItemMeta meta = contents[GuiLayout.OTHER_HEAD].getItemMeta();
+            meta.lore(List.of(DisplayItems.plain(m.component("gui.head-typing"))));
+            contents[GuiLayout.OTHER_HEAD].setItemMeta(meta);
+        }
         contents[GuiLayout.STATUS] = status(session, m);
 
         Component preview = m.component("gui.display-lore");
@@ -216,7 +224,7 @@ public final class TradeView {
                 m.component("gui.editor-current", amount(show(holder, holder.draft()))), List.of(),
                 money ? BigDecimal.ONE : holder.draft());
         contents[GuiLayout.EDITOR_BACK] = display.button(Material.ARROW, m.component("gui.editor-back"), List.of());
-        // "Type an amount" (chat / Bedrock form) arrives in step 7; its slot stays filler until then.
+        contents[GuiLayout.EDITOR_TYPE] = display.button(Material.NAME_TAG, m.component("gui.editor-type"), List.of());
         contents[GuiLayout.EDITOR_ZERO] = display.button(Material.BUCKET, m.component("gui.editor-zero"), List.of());
         contents[GuiLayout.EDITOR_MAX] = amountButton(Material.HOPPER,
                 m.component("gui.editor-max", amount(show(holder, max))), List.of(), money ? BigDecimal.ONE : max);

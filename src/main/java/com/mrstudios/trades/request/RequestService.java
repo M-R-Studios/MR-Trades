@@ -4,6 +4,7 @@ import com.mrstudios.trades.MRTrades;
 import com.mrstudios.trades.config.Messages;
 import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.config.Settings.SoundSetting;
+import com.mrstudios.trades.hook.BedrockForms;
 import com.mrstudios.trades.request.RequestChecks.Denial;
 import com.mrstudios.trades.request.RequestChecks.Party;
 import com.mrstudios.trades.rules.LimitsCheck.Position;
@@ -13,9 +14,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -104,14 +107,43 @@ public final class RequestService {
         messages().send(sender, "request-sent", Placeholder.unparsed("player", target.getName()));
         TagResolver name = Placeholder.unparsed("player", sender.getName());
         messages().send(target, "request-received", name);
-        if (settings().requests().clickableButtons()) {
-            // The typed commands are always in request-received, so clients without clickable
-            // chat (Bedrock) can still answer.
+        BedrockForms forms = tradeService.bedrockForms(target, true);
+        if (forms != null && settings().bedrock().requestForm()) {
+            sendRequestForm(forms, target, sender.getName());
+        }
+        if (forms == null && settings().requests().clickableButtons()) {
+            // Java only (Bedrock chat isn't clickable). The typed commands are always in
+            // request-received, so every client can answer.
             messages().send(target, "request-buttons", name,
                     Placeholder.styling("accept", ClickEvent.runCommand("/trade accept " + sender.getName())),
                     Placeholder.styling("deny", ClickEvent.runCommand("/trade deny " + sender.getName())));
         }
         play(target, settings().sounds().request());
+    }
+
+    /**
+     * DESIGN.md 4.1: Accept / Deny pop-up for a Bedrock target. The answer is checked again like a
+     * typed command; closing the form leaves the request pending.
+     */
+    private void sendRequestForm(BedrockForms forms, Player target, String requesterName) {
+        Messages m = messages();
+        String title = plain(m.component("form-request-title"));
+        String content = plain(m.component("form-request-content", Placeholder.unparsed("player", requesterName)));
+        forms.sendChoice(target.getUniqueId(), title, content, plain(m.component("form-accept")),
+                plain(m.component("form-deny")), accepted -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!target.isOnline()) {
+                        return;
+                    }
+                    if (accepted) {
+                        accept(target, requesterName);
+                    } else {
+                        deny(target, requesterName);
+                    }
+                }));
+    }
+
+    private static String plain(Component component) {
+        return PlainTextComponentSerializer.plainText().serialize(component);
     }
 
     /** {@code /trade accept [name]}. */
