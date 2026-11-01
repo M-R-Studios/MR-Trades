@@ -1,6 +1,7 @@
 package com.mrstudios.trades.listener;
 
 import com.mrstudios.trades.MRTrades;
+import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.rules.ClickAction;
 import com.mrstudios.trades.rules.ClickAction.AddFromInventory;
@@ -21,6 +22,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCreativeEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.inventory.InventoryView;
 
 /**
  * Clicks in trade windows (DESIGN.md 3.5 #1-#7). Every click and drag in our window is cancelled,
@@ -37,10 +39,22 @@ public final class GuiListener implements Listener {
         this.trades = trades;
     }
 
+    /** The editor in this view, looked up only for players who are trading (cheap for every other chest click). */
+    private EditorHolder editorOf(InventoryView view, Object who) {
+        return who instanceof Player player && trades.registry().isTrading(player.getUniqueId())
+                ? EditorHolder.of(view.getTopInventory())
+                : null;
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onClick(InventoryClickEvent event) {
         TradeHolder holder = TradeHolder.of(event.getView().getTopInventory());
         if (holder == null) {
+            EditorHolder editor = editorOf(event.getView(), event.getWhoClicked());
+            if (editor != null) {
+                event.setCancelled(true);
+                editorClick(event, (Player) event.getWhoClicked(), editor);
+            }
             return;
         }
         event.setCancelled(true);
@@ -52,7 +66,7 @@ public final class GuiListener implements Listener {
         boolean owner = side.playerId().equals(player.getUniqueId());
         ClickAction action = ClickRules.decide(new ClickSnapshot(ClickSnapshot.View.TRADE, event.getClick(),
                 event.getRawSlot(), event.getView().getTopInventory().getSize(), owner, !session.isEnded(),
-                false, false, 0));
+                false, trades.xpShown(side), 0));
         switch (action) {
             case AddFromInventory add -> trades.addFromInventory(player, session, side, add.playerSlot(), add.wholeStack());
             case ReturnFromOffer back -> trades.returnFromOffer(player, session, side, back.offerIndex(), back.wholeStack());
@@ -64,19 +78,32 @@ public final class GuiListener implements Listener {
         Bukkit.getScheduler().runTask(plugin, player::updateInventory);
     }
 
+    private void editorClick(InventoryClickEvent event, Player player, EditorHolder editor) {
+        boolean owner = editor.side().playerId().equals(player.getUniqueId());
+        ClickAction action = ClickRules.decide(new ClickSnapshot(ClickSnapshot.View.EDITOR, event.getClick(),
+                event.getRawSlot(), event.getView().getTopInventory().getSize(), owner, !editor.session().isEnded(),
+                false, true, trades.editorButtonCount(editor)));
+        if (action instanceof Press press) {
+            trades.editorPress(player, editor, press);
+        }
+        Bukkit.getScheduler().runTask(plugin, player::updateInventory);
+    }
+
     private void press(Player player, TradeSession session, Side side, Press press) {
         switch (press.button()) {
             case CONFIRM -> trades.toggleConfirm(player, session, side);
             case CANCEL -> trades.abort(session, EndReason.CANCELLED, player.getUniqueId(), Set.of());
+            case XP -> trades.openXpEditor(player, session, side);
             default -> {
-                // Money and XP editors arrive in steps 5 and 6.
+                // The money editor arrives in step 6.
             }
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDrag(InventoryDragEvent event) {
-        if (TradeHolder.of(event.getView().getTopInventory()) != null) {
+        if (TradeHolder.of(event.getView().getTopInventory()) != null
+                || editorOf(event.getView(), event.getWhoClicked()) != null) {
             event.setCancelled(true);
         }
     }

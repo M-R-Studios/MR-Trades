@@ -1,10 +1,14 @@
 package com.mrstudios.trades.gui;
 
 import com.mrstudios.trades.config.Messages;
+import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.trade.Side;
 import com.mrstudios.trades.trade.TradeSession;
 import com.mrstudios.trades.trade.TradeState;
+import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -24,12 +28,21 @@ public final class TradeView {
 
     private final Supplier<Messages> messages;
     private final DisplayItems display;
-    private final Supplier<Integer> countdownSeconds;
+    private final Supplier<Settings> settings;
+    private final Predicate<UUID> canOfferXp;
 
-    public TradeView(Supplier<Messages> messages, DisplayItems display, Supplier<Integer> countdownSeconds) {
+    /** @param canOfferXp whether that player may offer XP ({@code mrtrades.xp}) */
+    public TradeView(Supplier<Messages> messages, DisplayItems display, Supplier<Settings> settings,
+            Predicate<UUID> canOfferXp) {
         this.messages = messages;
         this.display = display;
-        this.countdownSeconds = countdownSeconds;
+        this.settings = settings;
+        this.canOfferXp = canOfferXp;
+    }
+
+    /** Whether {@code side}'s XP button is shown and clickable. */
+    public boolean xpShown(Side side) {
+        return settings.get().xp().enabled() && canOfferXp.test(side.playerId());
     }
 
     /** A new window for {@code side}, already drawn. */
@@ -74,7 +87,16 @@ public final class TradeView {
             contents[GuiLayout.otherOfferSlot(i)] = display.copyOf(otherItems.get(i), preview);
         }
 
-        // Money (step 6) and XP (step 5) buttons stay hidden until those steps.
+        // Money arrives in step 6. XP: your button when you may offer XP; theirs whenever XP is on.
+        if (xpShown(own)) {
+            contents[GuiLayout.XP] = amountButton(Material.EXPERIENCE_BOTTLE,
+                    m.component("gui.xp", amount(own.offer().xpLevels())), List.of(m.component("gui.xp-click")),
+                    own.offer().xpLevels());
+        }
+        if (settings.get().xp().enabled()) {
+            contents[GuiLayout.OTHER_XP] = amountButton(Material.EXPERIENCE_BOTTLE,
+                    m.component("gui.xp", amount(other.offer().xpLevels())), List.of(), other.offer().xpLevels());
+        }
         boolean confirmed = own.confirmedAtVersion() == session.version();
         if (confirmed) {
             contents[GuiLayout.CONFIRM] = display.button(Material.LIME_DYE, m.component("gui.confirmed"), List.of());
@@ -94,8 +116,7 @@ public final class TradeView {
 
     private ItemStack status(TradeSession session, Messages m) {
         if (session.state() == TradeState.COUNTDOWN) {
-            // The countdown itself arrives in step 5; until then the status shows where it will run.
-            int seconds = countdownSeconds.get();
+            int seconds = Math.max(1, session.countdownRemaining());
             ItemStack clock = display.button(Material.CLOCK,
                     m.component("gui.status-countdown", Placeholder.unparsed("seconds", String.valueOf(seconds))),
                     List.of());
@@ -111,6 +132,59 @@ public final class TradeView {
             text = m.component("gui.status-waiting-both");
         }
         return display.button(Material.CLOCK, text, List.of());
+    }
+
+    // --- Editor ---
+
+    /** A new XP editor for {@code side}, starting from their current offer. */
+    public EditorHolder createEditor(TradeSession session, Side side, int maxLevels) {
+        EditorHolder holder = new EditorHolder(session, side, EditorHolder.Kind.XP, side.offer().xpLevels());
+        Inventory inventory = Bukkit.createInventory(holder, GuiLayout.EDITOR_SIZE,
+                messages.get().component("gui.xp-editor-title"));
+        holder.setInventory(inventory);
+        renderEditor(holder, maxLevels);
+        return holder;
+    }
+
+    /** The +/- amounts of an editor of this kind, smallest first. */
+    public List<Integer> editorButtons(EditorHolder.Kind kind) {
+        return settings.get().xp().buttons();
+    }
+
+    /** Redraws an editor. {@code max} is the most the player can offer right now. */
+    public void renderEditor(EditorHolder holder, long max) {
+        Messages m = messages.get();
+        ItemStack filler = display.button(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
+        ItemStack[] contents = new ItemStack[GuiLayout.EDITOR_SIZE];
+        Arrays.fill(contents, filler);
+        List<Integer> buttons = editorButtons(holder.kind());
+        for (int i = 0; i < buttons.size(); i++) {
+            int value = buttons.get(i);
+            contents[GuiLayout.minusSlot(i)] = amountButton(Material.RED_STAINED_GLASS_PANE,
+                    m.component("gui.editor-minus", amount(value)), List.of(), value);
+            contents[GuiLayout.plusSlot(i)] = amountButton(Material.LIME_STAINED_GLASS_PANE,
+                    m.component("gui.editor-plus", amount(value)), List.of(), value);
+        }
+        contents[GuiLayout.EDITOR_CURRENT] = amountButton(Material.EXPERIENCE_BOTTLE,
+                m.component("gui.editor-current", amount(holder.draft())), List.of(), holder.draft());
+        contents[GuiLayout.EDITOR_BACK] = display.button(Material.ARROW, m.component("gui.editor-back"), List.of());
+        // "Type an amount" (chat / Bedrock form) arrives in step 7; its slot stays filler until then.
+        contents[GuiLayout.EDITOR_ZERO] = display.button(Material.BUCKET, m.component("gui.editor-zero"), List.of());
+        contents[GuiLayout.EDITOR_MAX] = amountButton(Material.HOPPER,
+                m.component("gui.editor-max", amount(max)), List.of(), max);
+        contents[GuiLayout.EDITOR_DONE] = display.button(Material.LIME_DYE, m.component("gui.editor-done"), List.of());
+        holder.getInventory().setContents(contents);
+    }
+
+    /** A button whose stack size shows {@code value} (1-64; 0 shows as 1). */
+    private ItemStack amountButton(Material material, Component name, List<Component> lore, long value) {
+        ItemStack item = display.button(material, name, lore);
+        item.setAmount((int) Math.max(1, Math.min(64, value)));
+        return item;
+    }
+
+    private static TagResolver amount(long value) {
+        return Placeholder.unparsed("amount", String.valueOf(value));
     }
 
     private ItemStack head(Side side, Component name) {

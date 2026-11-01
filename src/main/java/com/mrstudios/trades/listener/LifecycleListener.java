@@ -2,6 +2,7 @@ package com.mrstudios.trades.listener;
 
 import com.destroystokyo.paper.event.player.PlayerPostRespawnEvent;
 import com.mrstudios.trades.MRTrades;
+import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.request.RequestService;
 import com.mrstudios.trades.returns.ReturnService;
@@ -51,8 +52,12 @@ public final class LifecycleListener implements Listener {
     /** #8: closing the window ends the trade, unless the plugin closed it on purpose. */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) {
+            return;
+        }
         TradeHolder holder = TradeHolder.of(event.getInventory());
-        if (holder == null || !(event.getPlayer() instanceof Player player)) {
+        if (holder == null) {
+            editorClosed(event, player);
             return;
         }
         TradeSession session = holder.session();
@@ -65,6 +70,26 @@ public final class LifecycleListener implements Listener {
             return;
         }
         trades.abort(session, EndReason.CLOSED, player.getUniqueId(), Set.of());
+    }
+
+    /**
+     * #8 for the editor: Esc discards the draft and reopens the trade window. Any other close
+     * (another plugin, teleport) ends the trade like closing the trade window would.
+     */
+    private void editorClosed(InventoryCloseEvent event, Player player) {
+        if (!trades.registry().isTrading(player.getUniqueId())) {
+            return;
+        }
+        EditorHolder editor = EditorHolder.of(event.getInventory());
+        if (editor == null || editor.session().isEnded() || !editor.side().playerId().equals(player.getUniqueId())
+                || editor.side().view() != ViewState.EDITOR) {
+            return;
+        }
+        if (event.getReason() == InventoryCloseEvent.Reason.PLAYER) {
+            trades.editorClosed(player, editor);
+        } else {
+            trades.abort(editor.session(), EndReason.CLOSED, player.getUniqueId(), Set.of());
+        }
     }
 
     /** #9: the player is still online here, so their items go back into their inventory and are saved. */

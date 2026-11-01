@@ -54,6 +54,7 @@ public final class TradeSession {
     private TradeState state = TradeState.OPEN;
     private long version;
     private Countdown countdown;
+    private int countdownRemaining;
 
     /**
      * @param a the player who sent the request
@@ -208,6 +209,15 @@ public final class TradeSession {
         }
         side.clearConfirmation();
         stopCountdown();
+    }
+
+    /** Seconds left in the running countdown, for display. Meaningless outside {@link TradeState#COUNTDOWN}. */
+    public int countdownRemaining() {
+        return countdownRemaining;
+    }
+
+    public void setCountdownRemaining(int seconds) {
+        this.countdownRemaining = seconds;
     }
 
     /** Remembers the countdown task started after {@link ConfirmResult#BOTH_CONFIRMED}. */

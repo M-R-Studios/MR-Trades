@@ -36,6 +36,7 @@ import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 // Not final: MockBukkit subclasses the plugin class in tests.
@@ -87,8 +88,10 @@ public class MRTrades extends JavaPlugin {
                 new CooldownTracker(System::currentTimeMillis), new RequestToggle(), registry);
         returns = new ReturnService(this, new EscrowStore(this));
         DisplayItems display = new DisplayItems();
-        TradeView view = new TradeView(() -> state.messages(), display,
-                () -> state.settings().trade().countdownSeconds());
+        TradeView view = new TradeView(() -> state.messages(), display, () -> state.settings(), id -> {
+            Player player = getServer().getPlayer(id);
+            return player != null && player.hasPermission("mrtrades.xp");
+        });
         trades = new TradeService(this, registry, returns, view, display);
         requests.setTradeService(trades);
         getServer().getPluginManager().registerEvents(new GuiListener(this, trades), this);

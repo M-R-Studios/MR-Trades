@@ -5,10 +5,12 @@ import com.mrstudios.trades.config.Messages;
 import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.config.Settings.SoundSetting;
 import com.mrstudios.trades.gui.DisplayItems;
+import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.gui.TradeView;
 import com.mrstudios.trades.returns.PlayerStorage;
 import com.mrstudios.trades.returns.ReturnService;
+import com.mrstudios.trades.rules.ClickAction;
 import com.mrstudios.trades.rules.LimitsCheck;
 import com.mrstudios.trades.rules.LimitsCheck.Position;
 import com.mrstudios.trades.trade.TradeSession.ChangeResult;
@@ -26,6 +28,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.scheduler.BukkitTask;
@@ -66,6 +69,15 @@ public final class TradeService {
 
     public DisplayItems display() {
         return display;
+    }
+
+    /** Whether {@code side}'s XP button is shown and works. */
+    public boolean xpShown(Side side) {
+        return view.xpShown(side);
+    }
+
+    public int editorButtonCount(EditorHolder editor) {
+        return view.editorButtons(editor.kind()).size();
     }
 
     private Settings settings() {
@@ -201,8 +213,263 @@ public final class TradeService {
             default -> {
             }
         }
-        // The countdown and completion arrive in step 5: with both confirmed the trade waits here.
+        if (result == ConfirmResult.BOTH_CONFIRMED) {
+            startCountdown(session);
+            return;
+        }
         render(session);
+    }
+
+    // --- Countdown and completion ---
+
+    /**
+     * Both confirmed: counts down {@code trade.countdown-seconds}, once a second, then completes.
+     * Any change, unconfirm or editor opening stops it through the session.
+     */
+    private void startCountdown(TradeSession session) {
+        int seconds = settings().trade().countdownSeconds();
+        if (seconds <= 0) {
+            complete(session);
+            return;
+        }
+        session.setCountdownRemaining(seconds);
+        render(session);
+        playBoth(session, settings().sounds().countdown());
+        BukkitTask task = Bukkit.getScheduler().runTaskTimer(plugin, () -> countdownTick(session), 20L, 20L);
+        session.attachCountdown(task::cancel);
+    }
+
+    private void countdownTick(TradeSession session) {
+        if (session.state() != TradeState.COUNTDOWN) {
+            return; // Stopped; the session cancels the task.
+        }
+        int left = session.countdownRemaining() - 1;
+        session.setCountdownRemaining(left);
+        if (left <= 0) {
+            complete(session);
+        } else {
+            render(session);
+            playBoth(session, settings().sounds().countdown());
+        }
+    }
+
+    /**
+     * Atomic completion (DESIGN.md 3.5.1), on the main thread in one call. Re-checks everything,
+     * then moves XP and items in the same tick. If a check fails the trade either stays open with
+     * both confirmations cleared (space, levels) or ends with everything returned (a player left,
+     * died, moved away or changed game mode).
+     */
+    public void complete(TradeSession session) {
+        // 1. Guard: from here on nothing can change the offers or re-enter.
+        if (!session.beginCompleting()) {
+            return;
+        }
+        Player a = player(session.a());
+        Player b = player(session.b());
+
+        // 2. Re-validate.
+        CompletionValidator.Result check = CompletionValidator.validate(snapshot(session, a, b));
+        if (!check.ok()) {
+            completionRefused(session, check);
+            return;
+        }
+
+        boolean itemsTaken = false;
+        try {
+            // 5. XP: whole levels; checked above, so it can't fail.
+            int aXp = session.a().offer().xpLevels();
+            int bXp = session.b().offer().xpLevels();
+            if (aXp != 0 || bXp != 0) {
+                a.setLevel(a.getLevel() - aXp + bXp);
+                b.setLevel(b.getLevel() - bXp + aXp);
+            }
+
+            // 6. Items: out of both offers, escrow records cleared, into the other player's storage.
+            List<ItemStack> fromA = session.takeItems(session.a());
+            List<ItemStack> fromB = session.takeItems(session.b());
+            itemsTaken = true;
+            returns.store().clearEscrow(a);
+            returns.store().clearEscrow(b);
+            hand(b, fromA);
+            hand(a, fromB);
+        } catch (RuntimeException e) {
+            plugin.getLogger().log(Level.SEVERE, "Completing trade " + session.id() + " failed"
+                    + (itemsTaken ? " while handing over items" : "; everything goes back to its owner"), e);
+            if (!itemsTaken) {
+                abort(session, EndReason.CANCELLED, null, Set.of());
+                return;
+            }
+        }
+
+        // 7. Finish.
+        end(session);
+        for (Player player : List.of(a, b)) {
+            try {
+                // So a crash right after can't roll one player back to before the trade (3.6).
+                player.saveData();
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(Level.WARNING, "Couldn't save " + player.getName() + " after a trade", e);
+            }
+        }
+        for (Side side : List.of(session.a(), session.b())) {
+            Player player = player(side);
+            messages().send(player, "trade-complete", Placeholder.unparsed("player", session.other(side).name()));
+            play(player, settings().sounds().complete());
+        }
+    }
+
+    /** Gives {@code items} to {@code receiver}; anything that doesn't fit goes to their return queue. */
+    private void hand(Player receiver, List<ItemStack> items) {
+        List<ItemStack> leftover = new ArrayList<>();
+        for (ItemStack item : items) {
+            try {
+                ItemStack rest = PlayerStorage.add(receiver.getInventory(), item);
+                if (rest != null) {
+                    leftover.add(rest);
+                }
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(Level.WARNING, "Couldn't hand " + item + " to " + receiver.getName(), e);
+                leftover.add(item);
+            }
+        }
+        if (!leftover.isEmpty()) {
+            // Only possible if the space check and the move disagree; never deleted.
+            plugin.getLogger().warning(leftover.size() + " traded stack(s) didn't fit in " + receiver.getName()
+                    + "'s inventory and went to their return queue.");
+            returns.queue(receiver, leftover);
+            messages().send(receiver, "returns-queued", Placeholder.unparsed("count", String.valueOf(leftover.size())));
+        }
+    }
+
+    /** Step 3: a failed check either keeps the trade open (confirm again) or ends it. */
+    private void completionRefused(TradeSession session, CompletionValidator.Result check) {
+        UUID who = check.player();
+        if (check.reason().abortsTrade()) {
+            EndReason reason = switch (check.reason()) {
+                case PLAYER_OFFLINE -> EndReason.QUIT;
+                case PLAYER_DEAD -> EndReason.DIED;
+                case BLOCKED_GAMEMODE -> EndReason.GAMEMODE;
+                case TOO_FAR -> EndReason.TOO_FAR;
+                default -> EndReason.WORLD;
+            };
+            boolean died = check.reason() == CompletionValidator.Reason.PLAYER_DEAD && who != null;
+            abort(session, reason, who, died ? Set.of(who) : Set.of());
+            return;
+        }
+        session.completionFailed();
+        String key = switch (check.reason()) {
+            case NO_SPACE -> "complete-failed-space";
+            case NO_XP -> "complete-failed-xp";
+            case NO_MONEY, ECONOMY_UNAVAILABLE -> "complete-failed-money";
+            default -> null;
+        };
+        if (key != null) {
+            Side side = who == null ? null : session.side(who);
+            String name = side == null ? "" : side.name();
+            for (Side each : List.of(session.a(), session.b())) {
+                Player player = player(each);
+                if (player != null) {
+                    messages().send(player, key, Placeholder.unparsed("player", name));
+                }
+            }
+        }
+        render(session);
+    }
+
+    private CompletionSnapshot snapshot(TradeSession session, Player a, Player b) {
+        boolean bypassDistance = a != null && a.hasPermission(BYPASS_DISTANCE)
+                || b != null && b.hasPermission(BYPASS_DISTANCE);
+        return new CompletionSnapshot(session.version(), trader(session.a(), a), trader(session.b(), b),
+                settings().limits(), bypassDistance, null,
+                a != null ? a.getInventory().getMaxStackSize() : 64);
+    }
+
+    private CompletionSnapshot.Trader trader(Side side, Player player) {
+        if (player == null || !player.isOnline()) {
+            return new CompletionSnapshot.Trader(side.playerId(), false, false, null, false, null,
+                    side.confirmedAtVersion(), 0, List.of(), side.offer().itemViews(), side.offer().money(),
+                    side.offer().xpLevels());
+        }
+        return new CompletionSnapshot.Trader(side.playerId(), true, player.getHealth() <= 0, player.getGameMode(),
+                player.hasPermission(BYPASS_WORLD), position(player), side.confirmedAtVersion(), player.getLevel(),
+                new ArrayList<>(ItemStackView.of(storage(player.getInventory()))), side.offer().itemViews(),
+                side.offer().money(), side.offer().xpLevels());
+    }
+
+    // --- XP editor ---
+
+    /** The XP button: clears your own confirmation and swaps the window for the editor next tick. */
+    public void openXpEditor(Player player, TradeSession session, Side side) {
+        if (!session.acceptsChanges() || !view.xpShown(side)) {
+            return;
+        }
+        session.clearConfirmation(side);
+        // Set before the window changes, so the close of the trade window isn't taken as Esc.
+        side.setView(ViewState.REOPENING);
+        render(session);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (session.isEnded() || !player.isOnline()) {
+                return;
+            }
+            player.openInventory(view.createEditor(session, side, player.getLevel()).getInventory());
+            side.setView(ViewState.EDITOR);
+        });
+    }
+
+    /** A button in the editor. Only "Done" changes the offer. */
+    public void editorPress(Player player, EditorHolder editor, ClickAction.Press press) {
+        TradeSession session = editor.session();
+        Side side = editor.side();
+        if (session.isEnded()) {
+            return;
+        }
+        long max = player.getLevel();
+        List<Integer> buttons = view.editorButtons(editor.kind());
+        long draft = editor.draft();
+        switch (press.button()) {
+            case EDITOR_MINUS -> draft -= buttons.get(press.index());
+            case EDITOR_PLUS -> draft += buttons.get(press.index());
+            case EDITOR_ZERO -> draft = 0;
+            case EDITOR_MAX -> draft = max;
+            case EDITOR_DONE -> {
+                int levels = (int) Math.max(0, Math.min(max, draft));
+                if (session.setXpLevels(side, settings().trade().changeLockMs(), levels)
+                        == TradeSession.ChangeResult.CHANGED) {
+                    offerChanged(session, side);
+                }
+                reopenTrade(player, session, side);
+                return;
+            }
+            case EDITOR_BACK -> {
+                reopenTrade(player, session, side);
+                return;
+            }
+            default -> {
+                return; // "Type an amount" arrives in step 7.
+            }
+        }
+        editor.setDraft(Math.max(0, Math.min(max, draft)));
+        view.renderEditor(editor, max);
+    }
+
+    /** Esc in the editor discards the draft and goes back to the trade window; it doesn't end the trade. */
+    public void editorClosed(Player player, EditorHolder editor) {
+        TradeSession session = editor.session();
+        if (!session.isEnded() && editor.side().view() == ViewState.EDITOR) {
+            reopenTrade(player, session, editor.side());
+        }
+    }
+
+    private void reopenTrade(Player player, TradeSession session, Side side) {
+        side.setView(ViewState.REOPENING);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (session.isEnded() || !player.isOnline()) {
+                return;
+            }
+            player.openInventory(view.create(session, side).getInventory());
+            side.setView(ViewState.TRADE);
+            render(session);
+        });
     }
 
     // --- Ending ---
@@ -412,19 +679,32 @@ public final class TradeService {
 
     // --- Helpers ---
 
+    /** Whether {@code player} is looking at this trade's window or their own editor for it. */
     public boolean isOwnView(Player player, TradeSession session) {
-        TradeHolder trade = TradeHolder.of(player.getOpenInventory().getTopInventory());
-        return trade != null && trade.session() == session && trade.side().playerId().equals(player.getUniqueId());
+        Inventory top = player.getOpenInventory().getTopInventory();
+        TradeHolder trade = TradeHolder.of(top);
+        if (trade != null) {
+            return trade.session() == session && trade.side().playerId().equals(player.getUniqueId());
+        }
+        EditorHolder editor = EditorHolder.of(top);
+        return editor != null && editor.session() == session && editor.side().playerId().equals(player.getUniqueId());
     }
 
     public void render(TradeSession session) {
         for (Side side : List.of(session.a(), session.b())) {
             Player player = player(side);
-            if (player != null) {
-                TradeHolder trade = TradeHolder.of(player.getOpenInventory().getTopInventory());
-                if (trade != null && trade.session() == session) {
-                    view.render(trade);
-                }
+            if (player == null) {
+                continue;
+            }
+            Inventory top = player.getOpenInventory().getTopInventory();
+            TradeHolder trade = TradeHolder.of(top);
+            if (trade != null && trade.session() == session) {
+                view.render(trade);
+                continue;
+            }
+            EditorHolder editor = EditorHolder.of(top);
+            if (editor != null && editor.session() == session) {
+                view.renderEditor(editor, player.getLevel());
             }
         }
     }
