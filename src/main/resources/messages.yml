@@ -125,6 +125,14 @@ gui:
   history-prev: "<gray>Previous page"
   history-next: "<gray>Next page"
   history-back: "<gray>Back"
+  history-detail-title: "Trade with <player>"
+  history-gave: "<yellow>You gave"
+  history-got: "<yellow>You got"
+  # Part of <gave> / <got> in history-entry-lore.
+  history-xp: "<amount> XP levels"
+  history-nothing: "nothing"
+  history-unreadable: "<red>Unreadable item (saved by another Minecraft version?)"
+  history-economy-error: "<red>The payment failed and wasn't refunded; staff were told."
   display-lore: "<dark_gray>Preview"
 
 # Commands

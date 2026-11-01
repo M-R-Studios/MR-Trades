@@ -9,6 +9,8 @@ import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.gui.TradeView;
 import com.mrstudios.trades.hook.BedrockForms;
+import com.mrstudios.trades.history.TradeLog;
+import com.mrstudios.trades.history.TradeRecord;
 import com.mrstudios.trades.hook.EconomyPort;
 import com.mrstudios.trades.input.AmountParser;
 import com.mrstudios.trades.input.ChatInput;
@@ -60,12 +62,14 @@ public final class TradeService {
     private final Supplier<EconomyPort> economy;
     private final Supplier<BedrockForms> bedrock;
     private final ChatInput input;
+    /** The trade log, or null when history is off. */
+    private final Supplier<TradeLog> history;
     /**
      * Bedrock clients (through Geyser) close their old screen when the server swaps one window for
      * another, and that "closed" arrives after the new window is open; the server then closes the
      * new one. So for Bedrock players a switch is: close, wait this many ticks, then open.
      */
-    static final int BEDROCK_SWITCH_TICKS = 4;
+    public static final int BEDROCK_SWITCH_TICKS = 4;
     /** A Bedrock "closed" this soon after the plugin opened a window is taken as stray. */
     static final int STRAY_CLOSE_TICKS = 6;
     /** At most this many stray closes are absorbed in a row; after that a close is real. */
@@ -78,7 +82,8 @@ public final class TradeService {
     private boolean shuttingDown;
 
     public TradeService(MRTrades plugin, TradeRegistry registry, ReturnService returns, TradeView view,
-            DisplayItems display, Supplier<EconomyPort> economy, Supplier<BedrockForms> bedrock, ChatInput input) {
+            DisplayItems display, Supplier<EconomyPort> economy, Supplier<BedrockForms> bedrock, ChatInput input,
+            Supplier<TradeLog> history) {
         this.plugin = plugin;
         this.registry = registry;
         this.returns = returns;
@@ -87,6 +92,7 @@ public final class TradeService {
         this.economy = economy;
         this.bedrock = bedrock;
         this.input = input;
+        this.history = history;
     }
 
     public TradeRegistry registry() {
@@ -316,6 +322,8 @@ public final class TradeService {
         }
 
         boolean itemsTaken = false;
+        List<ItemStack> fromA = List.of();
+        List<ItemStack> fromB = List.of();
         try {
             // 5. XP: whole levels; checked above, so it can't fail.
             int aXp = session.a().offer().xpLevels();
@@ -326,8 +334,8 @@ public final class TradeService {
             }
 
             // 6. Items: out of both offers, escrow records cleared, into the other player's storage.
-            List<ItemStack> fromA = session.takeItems(session.a());
-            List<ItemStack> fromB = session.takeItems(session.b());
+            fromA = session.takeItems(session.a());
+            fromB = session.takeItems(session.b());
             itemsTaken = true;
             returns.store().clearEscrow(a);
             returns.store().clearEscrow(b);
@@ -356,6 +364,43 @@ public final class TradeService {
             Player player = player(side);
             messages().send(player, "trade-complete", Placeholder.unparsed("player", session.other(side).name()));
             play(player, settings().sounds().complete());
+        }
+        // 8. History (DESIGN.md 6.3): built here, written on another thread; can't affect the trade.
+        log(session, a, session.id(), fromA, fromB, false);
+    }
+
+    /**
+     * Queues the history record. Items are serialized here on the main thread. Any failure is
+     * only logged: the trade has already happened.
+     */
+    private void log(TradeSession session, Player a, UUID id, List<ItemStack> fromA, List<ItemStack> fromB,
+            boolean economyError) {
+        TradeLog log = history.get();
+        if (log == null || !settings().history().enabled()) {
+            return;
+        }
+        try {
+            Location at = a.getLocation();
+            Side sa = session.a();
+            Side sb = session.b();
+            log.record(new TradeRecord(id, System.currentTimeMillis(), settings().history().effectiveServerName(),
+                    at.getWorld() == null ? "" : at.getWorld().getName(), at.getBlockX(), at.getBlockY(), at.getBlockZ(),
+                    sa.playerId(), sa.name(), sb.playerId(), sb.name(),
+                    TradeRecord.serialize(fromA), TradeRecord.serialize(fromB),
+                    TradeRecord.summarize(fromA), TradeRecord.summarize(fromB),
+                    sa.offer().money(), sb.offer().money(), sa.offer().xpLevels(), sb.offer().xpLevels(),
+                    economyError, dataVersion()));
+        } catch (RuntimeException e) {
+            plugin.getLogger().log(Level.WARNING, "Couldn't record trade " + id + " in the trade history", e);
+        }
+    }
+
+    @SuppressWarnings("deprecation") // getUnsafe: the only source of the data version
+    private static int dataVersion() {
+        try {
+            return Bukkit.getUnsafe().getDataVersion();
+        } catch (RuntimeException e) {
+            return 0;
         }
     }
 
@@ -395,6 +440,11 @@ public final class TradeService {
             plugin.getLogger().severe("Economy error in trade " + session.id() + ": " + paymentText(paid, payerName,
                     payee == null ? "?" : payee.name()) + " was withdrawn, but neither the deposit nor the refund"
                     + " worked (" + paid.errors() + "). The payer must be refunded by hand.");
+            // Recorded with its own id (no items moved; the trade stays open and may still complete).
+            Player a = player(session.a());
+            if (a != null) {
+                log(session, a, UUID.randomUUID(), List.of(), List.of(), true);
+            }
         } else {
             plugin.getLogger().warning("Trade " + session.id() + ": the economy refused to move "
                     + paid.amount().toPlainString() + " (" + paid.errors() + "); nothing was moved.");

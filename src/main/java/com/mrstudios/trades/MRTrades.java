@@ -7,6 +7,12 @@ import com.mrstudios.trades.config.Messages;
 import com.mrstudios.trades.config.MessagesLoader;
 import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.config.SettingsLoader;
+import com.mrstudios.trades.gui.HistoryView;
+import com.mrstudios.trades.history.Backlog;
+import com.mrstudios.trades.history.HistoryService;
+import com.mrstudios.trades.history.MysqlDatabase;
+import com.mrstudios.trades.history.SqliteDatabase;
+import com.mrstudios.trades.history.TradeLog;
 import com.mrstudios.trades.hook.Hooks;
 import com.mrstudios.trades.listener.LifecycleListener;
 import com.mrstudios.trades.listener.RequestListener;
@@ -21,6 +27,7 @@ import com.mrstudios.trades.listener.ChatListener;
 import com.mrstudios.trades.listener.DisplayGuardListener;
 import com.mrstudios.trades.listener.EconomyListener;
 import com.mrstudios.trades.listener.GuiListener;
+import com.mrstudios.trades.listener.HistoryListener;
 import com.mrstudios.trades.returns.EscrowStore;
 import com.mrstudios.trades.returns.ReturnService;
 import com.mrstudios.trades.trade.EndReason;
@@ -67,6 +74,13 @@ public class MRTrades extends JavaPlugin {
     private RequestService requests;
     private ReturnService returns;
     private TradeService trades;
+    /** The trade log; null when {@code history.enabled} was off at startup. */
+    private TradeLog tradeLog;
+    private HistoryService history;
+    /** Retention runs at startup and then once a day (DESIGN.md 6.4). */
+    private static final long DAY_TICKS = 24L * 60 * 60 * 20;
+    /** How long {@code onDisable} waits for queued history writes. */
+    private static final long LOG_DRAIN_MS = 10_000;
 
     @Override
     public void onEnable() {
@@ -89,6 +103,9 @@ public class MRTrades extends JavaPlugin {
         }
 
         hooks = new Hooks(getServer());
+        if (settings.history().enabled()) {
+            openTradeLog(settings);
+        }
         requests = new RequestService(this, new RequestManager(System::currentTimeMillis),
                 new CooldownTracker(System::currentTimeMillis), new RequestToggle(), registry);
         returns = new ReturnService(this, new EscrowStore(this));
@@ -96,7 +113,10 @@ public class MRTrades extends JavaPlugin {
         TradeView view = new TradeView(() -> state.messages(), display, () -> state.settings(), hooks::economy,
                 id -> hasPermission(id, "mrtrades.xp"), id -> hasPermission(id, "mrtrades.money"));
         ChatInput chatInput = new ChatInput();
-        trades = new TradeService(this, registry, returns, view, display, hooks::economy, hooks::bedrock, chatInput);
+        trades = new TradeService(this, registry, returns, view, display, hooks::economy, hooks::bedrock, chatInput,
+                () -> tradeLog);
+        history = new HistoryService(this, () -> tradeLog, new HistoryView(() -> state.messages(), display, view::formatMoney),
+                trades::isBedrock, registry::isTrading);
         requests.setTradeService(trades);
         getServer().getPluginManager().registerEvents(new GuiListener(this, trades), this);
         getServer().getPluginManager().registerEvents(new LifecycleListener(this, trades, requests, returns), this);
@@ -105,7 +125,13 @@ public class MRTrades extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ChatListener(this, chatInput, trades), this);
         getServer().getPluginManager().registerEvents(
                 new RequestListener(this, requests, System::currentTimeMillis), this);
+        getServer().getPluginManager().registerEvents(new HistoryListener(this, history), this);
         getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
+        getServer().getScheduler().runTaskTimer(this, () -> {
+            if (tradeLog != null) {
+                tradeLog.purge(state.settings().history().retentionDays());
+            }
+        }, DAY_TICKS, DAY_TICKS);
         trades.startTasks();
 
         PluginCommand adminCommand = Objects.requireNonNull(getCommand("mrtrades"));
@@ -113,7 +139,7 @@ public class MRTrades extends JavaPlugin {
         adminCommand.setExecutor(admin);
         adminCommand.setTabCompleter(admin);
         PluginCommand tradeCommand = Objects.requireNonNull(getCommand("trade"));
-        TradeCommand trade = new TradeCommand(this, requests, trades, returns);
+        TradeCommand trade = new TradeCommand(this, requests, trades, returns, history);
         tradeCommand.setExecutor(trade);
         tradeCommand.setTabCompleter(trade);
         updatePermissionMessage();
@@ -128,6 +154,35 @@ public class MRTrades extends JavaPlugin {
         if (trades != null) {
             trades.abortAll(EndReason.SERVER_STOP);
         }
+        // Queued history writes get a moment to finish; the rest go to the backlog.
+        if (tradeLog != null) {
+            tradeLog.close(LOG_DRAIN_MS);
+        }
+    }
+
+    /** Starts the trade log on the storage from {@code settings}; it opens on its own thread. */
+    private void openTradeLog(Settings settings) {
+        Settings.Storage storage = settings.storage();
+        tradeLog = new TradeLog(getLogger(), new Backlog(getDataFolder().toPath().resolve(Backlog.FILE_NAME)),
+                Thread::sleep, System::currentTimeMillis);
+        tradeLog.open(() -> storage.type() == Settings.StorageType.MYSQL
+                ? new MysqlDatabase(storage.mysql())
+                : new SqliteDatabase(new File(getDataFolder(), storage.sqliteFile())), settings.history().retentionDays());
+    }
+
+    /** The trade log, or null when history was off at startup. */
+    public TradeLog tradeLog() {
+        return tradeLog;
+    }
+
+    public HistoryService history() {
+        return history;
+    }
+
+    /** For {@code /mrtrades version}: the storage type and how it's doing. */
+    public String storageDescription() {
+        String type = startupStorage.type().name();
+        return tradeLog == null ? type + " (history off)" : type + " - " + tradeLog.describe();
     }
 
     public State state() {
@@ -197,6 +252,9 @@ public class MRTrades extends JavaPlugin {
         List<String> needRestart = new ArrayList<>();
         if (!updated.settings().storage().equals(startupStorage)) {
             needRestart.add("config.yml: storage changes need a restart; the storage in use was not changed.");
+        }
+        if (updated.settings().history().enabled() && tradeLog == null) {
+            needRestart.add("config.yml: history.enabled was turned on; restart the server to start the trade history.");
         }
         for (String hook : hooks.changedSinceStartup()) {
             needRestart.add(hook + " was added or removed since startup; restart the server to change the hook.");

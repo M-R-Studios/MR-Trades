@@ -143,6 +143,42 @@ class MoneyCompletionTest extends TradeFixture {
     }
 
     @Test
+    void failedRefundIsRecordedInTheTradeLogAsAnEconomyError() {
+        TradeSession session = start();
+        session.setMoney(session.a(), 0, new BigDecimal("100"));
+        economy.plan.put(2, Mode.FAIL);
+        economy.plan.put(3, Mode.FAIL);
+        bothConfirm();
+        server.getScheduler().performTicks(COUNTDOWN_TICKS + 1);
+
+        plugin.tradeLog().flush(5000);
+        List<com.mrstudios.trades.history.TradeRecord> rows = plugin.tradeLog()
+                .page(new com.mrstudios.trades.history.HistoryQuery(alex.getUniqueId(), "Alex", 1)).join().rows();
+        assertEquals(1, rows.size());
+        assertTrue(rows.get(0).economyError());
+        assertEquals(0, new BigDecimal("100").compareTo(rows.get(0).aMoney()));
+        assertEquals(0, rows.get(0).aItems().length, "no items moved");
+        assertTrue(session.state() == TradeState.OPEN, "the trade itself stays open");
+    }
+
+    @Test
+    void moneyTradesAreLoggedWithTheGrossOffers() {
+        TradeSession session = start();
+        session.setMoney(session.a(), 0, new BigDecimal("100"));
+        session.setMoney(session.b(), 0, new BigDecimal("30"));
+        bothConfirm();
+        server.getScheduler().performTicks(COUNTDOWN_TICKS + 1);
+        assertTrue(session.isEnded());
+
+        plugin.tradeLog().flush(5000);
+        com.mrstudios.trades.history.TradeRecord row = plugin.tradeLog()
+                .page(new com.mrstudios.trades.history.HistoryQuery(sam.getUniqueId(), "Sam", 1)).join().rows().get(0);
+        assertEquals(0, new BigDecimal("100").compareTo(row.aMoney()));
+        assertEquals(0, new BigDecimal("30").compareTo(row.bMoney()));
+        assertFalse(row.economyError());
+    }
+
+    @Test
     void economyGoingAwaySetsMoneyOffersToZero() {
         TradeSession session = start();
         session.setMoney(session.a(), 0, new BigDecimal("25"));

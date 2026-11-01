@@ -2,6 +2,7 @@ package com.mrstudios.trades.command;
 
 import com.mrstudios.trades.MRTrades;
 import com.mrstudios.trades.config.Messages;
+import com.mrstudios.trades.history.HistoryService;
 import com.mrstudios.trades.request.RequestService;
 import com.mrstudios.trades.returns.ReturnService;
 import com.mrstudios.trades.returns.ReturnService.Delivery;
@@ -9,6 +10,7 @@ import com.mrstudios.trades.trade.EndReason;
 import com.mrstudios.trades.trade.TradeService;
 import com.mrstudios.trades.trade.TradeSession;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -19,9 +21,9 @@ import org.bukkit.command.TabExecutor;
 import org.bukkit.entity.Player;
 
 /**
- * {@code /trade [player|accept|deny|cancel|toggle|claim]}. No permission in {@code plugin.yml},
+ * {@code /trade [player|accept|deny|cancel|toggle|claim|history]}. No permission in {@code plugin.yml},
  * because {@code /trade claim} must work without one (DESIGN.md 2.3); each subcommand checks its
- * own. {@code history} arrives with step 9; until then it shows the help.
+ * own.
  */
 public final class TradeCommand implements TabExecutor {
 
@@ -33,12 +35,15 @@ public final class TradeCommand implements TabExecutor {
     private final RequestService requests;
     private final TradeService trades;
     private final ReturnService returns;
+    private final HistoryService history;
 
-    public TradeCommand(MRTrades plugin, RequestService requests, TradeService trades, ReturnService returns) {
+    public TradeCommand(MRTrades plugin, RequestService requests, TradeService trades, ReturnService returns,
+            HistoryService history) {
         this.plugin = plugin;
         this.requests = requests;
         this.trades = trades;
         this.returns = returns;
+        this.history = history;
     }
 
     @Override
@@ -53,6 +58,11 @@ public final class TradeCommand implements TabExecutor {
         if (sub.equals("claim")) {
             // Never gated by a permission: it's how players get their own items back.
             claim(player, messages);
+            return true;
+        }
+        if (sub.equals("history")) {
+            // Its own permissions: staff may look up trades without trading themselves.
+            history.command(player, Arrays.copyOfRange(args, 1, args.length));
             return true;
         }
         if (sub.equals("toggle")) {
@@ -71,7 +81,7 @@ public final class TradeCommand implements TabExecutor {
             case "accept" -> requests.accept(player, name);
             case "deny" -> requests.deny(player, name);
             case "cancel" -> cancel(player);
-            case "", "history" -> messages.sendLines(player, "help");
+            case "" -> messages.sendLines(player, "help");
             default -> requests.send(player, args[0]);
         }
         return true;
@@ -124,9 +134,19 @@ public final class TradeCommand implements TabExecutor {
             if (player.hasPermission(PERMISSION_TOGGLE)) {
                 options.add("toggle");
             }
+            if (player.hasPermission(HistoryService.PERMISSION)) {
+                options.add("history");
+            }
         } else if (args.length == 2 && canTrade
                 && (args[0].equalsIgnoreCase("accept") || args[0].equalsIgnoreCase("deny"))) {
             options.addAll(requests.requesterNames(player));
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("history")
+                && player.hasPermission(HistoryService.PERMISSION_OTHERS)) {
+            for (Player online : plugin.getServer().getOnlinePlayers()) {
+                if (player.canSee(online)) {
+                    options.add(online.getName());
+                }
+            }
         }
         String typed = args[args.length - 1].toLowerCase(Locale.ROOT);
         return options.stream().filter(o -> o.toLowerCase(Locale.ROOT).startsWith(typed)).toList();

@@ -80,7 +80,7 @@ class AdminCommandTest {
         String text = messages().get(0);
         assertTrue(text.contains("MR-Trades"), text);
         assertTrue(text.contains("Hooks: none"), text);
-        assertTrue(text.endsWith("Storage: SQLITE"), text);
+        assertTrue(text.contains("Storage: SQLITE - "), text);
     }
 
     @Test

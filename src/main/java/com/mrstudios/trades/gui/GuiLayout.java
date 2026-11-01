@@ -41,6 +41,19 @@ public final class GuiLayout {
     public static final int EDITOR_MAX = 24;
     public static final int EDITOR_DONE = 26;
 
+    /*
+     * History (54 slots). List: 0-44 one trade each, newest first; row 5: [45 previous] [49 close] [53 next].
+     * Details: what the viewed player gave in rows 0-3, columns 0-3, what they got in columns 5-8,
+     * a divider in column 4, [36 gave money/XP] [44 got money/XP], row 5: [49 back].
+     */
+    public static final int HISTORY_SIZE = 54;
+    public static final int HISTORY_PREVIOUS = 45;
+    public static final int HISTORY_CLOSE = 49;
+    public static final int HISTORY_NEXT = 53;
+    public static final int DETAIL_GAVE_INFO = 36;
+    public static final int DETAIL_GOT_INFO = 44;
+    public static final int DETAIL_BACK = 49;
+
     private static final int FIRST_OFFER_ROW = 1;
     private static final int OFFER_ROWS = 4;
     private static final int OFFER_COLUMNS = 4;
@@ -70,6 +83,12 @@ public final class GuiLayout {
     /** The slot showing the other player's offer stack {@code index} (0-15) on the right side. */
     public static int otherOfferSlot(int index) {
         return ownOfferSlot(index) + OTHER_OFFER_COLUMN;
+    }
+
+    /** The details slot of stack {@code index} (0-15): {@code gave} on the left, otherwise the right. */
+    public static int detailSlot(boolean gave, int index) {
+        checkOfferIndex(index);
+        return (index / OFFER_COLUMNS) * 9 + index % OFFER_COLUMNS + (gave ? 0 : OTHER_OFFER_COLUMN);
     }
 
     /** The offer index shown in {@code slot} on your own side, or -1. */

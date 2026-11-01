@@ -38,7 +38,7 @@ public final class AdminCommand implements TabExecutor {
                     Placeholder.unparsed("version", plugin.getPluginMeta().getVersion()),
                     Placeholder.unparsed("server", Bukkit.getName() + " " + Bukkit.getMinecraftVersion()),
                     Placeholder.unparsed("hooks", plugin.hooks().describe()),
-                    Placeholder.unparsed("storage", plugin.startupStorage().type().name()));
+                    Placeholder.unparsed("storage", plugin.storageDescription()));
             case "cancel" -> {
                 if (args.length < 2) {
                     messages.sendLines(sender, "admin-help");

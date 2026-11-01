@@ -94,6 +94,8 @@ public final class MessagesLoader {
             Map.entry("gui.editor-current", Set.of("amount")),
             Map.entry("gui.editor-max", Set.of("amount")),
             Map.entry("gui.history-entry", PLAYER),
+            Map.entry("gui.history-detail-title", PLAYER),
+            Map.entry("gui.history-xp", Set.of("amount")),
             Map.entry("gui.history-entry-lore", Set.of("player", "date", "gave", "got")),
             Map.entry("version", Set.of("version", "server", "hooks", "storage")),
             Map.entry("admin-cancelled", PLAYER),
