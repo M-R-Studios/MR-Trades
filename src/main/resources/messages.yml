@@ -141,7 +141,7 @@ player-only: "<prefix><red>Only players can use this command."
 help:
   - '<prefix><white>/trade \<player></white> <gray>- send a trade request'
   - "<prefix><white>/trade accept|deny [player]</white> <gray>- answer a request"
-  - "<prefix><white>/trade cancel</white> <gray>- withdraw your request"
+  - "<prefix><white>/trade cancel</white> <gray>- withdraw your request or cancel your trade"
   - "<prefix><white>/trade toggle</white> <gray>- turn requests off or on"
   - "<prefix><white>/trade claim</white> <gray>- get back items that didn't fit"
   - "<prefix><white>/trade history</white> <gray>- your past trades"
