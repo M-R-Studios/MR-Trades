@@ -66,7 +66,7 @@ public final class GuiListener implements Listener {
         boolean owner = side.playerId().equals(player.getUniqueId());
         ClickAction action = ClickRules.decide(new ClickSnapshot(ClickSnapshot.View.TRADE, event.getClick(),
                 event.getRawSlot(), event.getView().getTopInventory().getSize(), owner, !session.isEnded(),
-                false, trades.xpShown(side), 0));
+                trades.moneyShown(side), trades.xpShown(side), 0));
         switch (action) {
             case AddFromInventory add -> trades.addFromInventory(player, session, side, add.playerSlot(), add.wholeStack());
             case ReturnFromOffer back -> trades.returnFromOffer(player, session, side, back.offerIndex(), back.wholeStack());
@@ -94,8 +94,8 @@ public final class GuiListener implements Listener {
             case CONFIRM -> trades.toggleConfirm(player, session, side);
             case CANCEL -> trades.abort(session, EndReason.CANCELLED, player.getUniqueId(), Set.of());
             case XP -> trades.openXpEditor(player, session, side);
+            case MONEY -> trades.openMoneyEditor(player, session, side);
             default -> {
-                // The money editor arrives in step 6.
             }
         }
     }

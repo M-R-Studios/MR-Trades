@@ -2,6 +2,7 @@ package com.mrstudios.trades.gui;
 
 import com.mrstudios.trades.trade.Side;
 import com.mrstudios.trades.trade.TradeSession;
+import java.math.BigDecimal;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 
@@ -11,18 +12,19 @@ import org.bukkit.inventory.InventoryHolder;
  */
 public final class EditorHolder implements InventoryHolder {
 
-    /** What the editor edits. Money arrives in step 6. */
+    /** What the editor edits. */
     public enum Kind {
+        MONEY,
         XP
     }
 
     private final TradeSession session;
     private final Side side;
     private final Kind kind;
-    private long draft;
+    private BigDecimal draft;
     private Inventory inventory;
 
-    public EditorHolder(TradeSession session, Side side, Kind kind, long draft) {
+    public EditorHolder(TradeSession session, Side side, Kind kind, BigDecimal draft) {
         this.session = session;
         this.side = side;
         this.kind = kind;
@@ -52,11 +54,12 @@ public final class EditorHolder implements InventoryHolder {
         return kind;
     }
 
-    public long draft() {
+    /** Levels for XP (always whole), an amount for money. */
+    public BigDecimal draft() {
         return draft;
     }
 
-    public void setDraft(long draft) {
+    public void setDraft(BigDecimal draft) {
         this.draft = draft;
     }
 

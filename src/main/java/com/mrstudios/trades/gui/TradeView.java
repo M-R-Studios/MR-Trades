@@ -2,9 +2,11 @@ package com.mrstudios.trades.gui;
 
 import com.mrstudios.trades.config.Messages;
 import com.mrstudios.trades.config.Settings;
+import com.mrstudios.trades.hook.EconomyPort;
 import com.mrstudios.trades.trade.Side;
 import com.mrstudios.trades.trade.TradeSession;
 import com.mrstudios.trades.trade.TradeState;
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -29,20 +31,49 @@ public final class TradeView {
     private final Supplier<Messages> messages;
     private final DisplayItems display;
     private final Supplier<Settings> settings;
+    private final Supplier<EconomyPort> economy;
     private final Predicate<UUID> canOfferXp;
+    private final Predicate<UUID> canOfferMoney;
 
-    /** @param canOfferXp whether that player may offer XP ({@code mrtrades.xp}) */
+    /**
+     * @param economy the current economy, or null without Vault
+     * @param canOfferXp whether that player may offer XP ({@code mrtrades.xp})
+     * @param canOfferMoney whether that player may offer money ({@code mrtrades.money})
+     */
     public TradeView(Supplier<Messages> messages, DisplayItems display, Supplier<Settings> settings,
-            Predicate<UUID> canOfferXp) {
+            Supplier<EconomyPort> economy, Predicate<UUID> canOfferXp, Predicate<UUID> canOfferMoney) {
         this.messages = messages;
         this.display = display;
         this.settings = settings;
+        this.economy = economy;
         this.canOfferXp = canOfferXp;
+        this.canOfferMoney = canOfferMoney;
     }
 
     /** Whether {@code side}'s XP button is shown and clickable. */
     public boolean xpShown(Side side) {
         return settings.get().xp().enabled() && canOfferXp.test(side.playerId());
+    }
+
+    /** Whether money trading works right now: on in the config, and an economy behind Vault. */
+    public boolean moneyAvailable() {
+        EconomyPort port = economy.get();
+        return settings.get().money().enabled() && port != null && port.isAvailable();
+    }
+
+    /** Whether {@code side}'s money button is shown and clickable. */
+    public boolean moneyShown(Side side) {
+        return moneyAvailable() && canOfferMoney.test(side.playerId());
+    }
+
+    /** {@code amount} of money, written the way the economy writes it. */
+    public String formatMoney(BigDecimal amount) {
+        EconomyPort port = economy.get();
+        try {
+            return port != null && port.isAvailable() ? port.format(amount) : amount.toPlainString();
+        } catch (RuntimeException e) {
+            return amount.toPlainString();
+        }
     }
 
     /** A new window for {@code side}, already drawn. */
@@ -87,7 +118,16 @@ public final class TradeView {
             contents[GuiLayout.otherOfferSlot(i)] = display.copyOf(otherItems.get(i), preview);
         }
 
-        // Money arrives in step 6. XP: your button when you may offer XP; theirs whenever XP is on.
+        // Your buttons when you may offer money / XP; theirs whenever money / XP trading is on.
+        if (moneyShown(own)) {
+            contents[GuiLayout.MONEY] = display.button(Material.GOLD_INGOT,
+                    m.component("gui.money", amount(formatMoney(own.offer().money()))),
+                    List.of(m.component("gui.money-click")));
+        }
+        if (moneyAvailable()) {
+            contents[GuiLayout.OTHER_MONEY] = display.button(Material.GOLD_INGOT,
+                    m.component("gui.money", amount(formatMoney(other.offer().money()))), List.of());
+        }
         if (xpShown(own)) {
             contents[GuiLayout.XP] = amountButton(Material.EXPERIENCE_BOTTLE,
                     m.component("gui.xp", amount(own.offer().xpLevels())), List.of(m.component("gui.xp-click")),
@@ -136,55 +176,75 @@ public final class TradeView {
 
     // --- Editor ---
 
-    /** A new XP editor for {@code side}, starting from their current offer. */
-    public EditorHolder createEditor(TradeSession session, Side side, int maxLevels) {
-        EditorHolder holder = new EditorHolder(session, side, EditorHolder.Kind.XP, side.offer().xpLevels());
+    /** A new money or XP editor for {@code side}, starting from their current offer. */
+    public EditorHolder createEditor(TradeSession session, Side side, EditorHolder.Kind kind, BigDecimal max) {
+        boolean money = kind == EditorHolder.Kind.MONEY;
+        BigDecimal current = money ? side.offer().money() : BigDecimal.valueOf(side.offer().xpLevels());
+        EditorHolder holder = new EditorHolder(session, side, kind, current);
         Inventory inventory = Bukkit.createInventory(holder, GuiLayout.EDITOR_SIZE,
-                messages.get().component("gui.xp-editor-title"));
+                messages.get().component(money ? "gui.money-editor-title" : "gui.xp-editor-title"));
         holder.setInventory(inventory);
-        renderEditor(holder, maxLevels);
+        renderEditor(holder, max);
         return holder;
     }
 
     /** The +/- amounts of an editor of this kind, smallest first. */
-    public List<Integer> editorButtons(EditorHolder.Kind kind) {
-        return settings.get().xp().buttons();
+    public List<BigDecimal> editorButtons(EditorHolder.Kind kind) {
+        if (kind == EditorHolder.Kind.MONEY) {
+            return settings.get().money().buttons();
+        }
+        return settings.get().xp().buttons().stream().map(BigDecimal::valueOf).toList();
     }
 
     /** Redraws an editor. {@code max} is the most the player can offer right now. */
-    public void renderEditor(EditorHolder holder, long max) {
+    public void renderEditor(EditorHolder holder, BigDecimal max) {
         Messages m = messages.get();
+        boolean money = holder.kind() == EditorHolder.Kind.MONEY;
+        Material icon = money ? Material.GOLD_INGOT : Material.EXPERIENCE_BOTTLE;
         ItemStack filler = display.button(Material.GRAY_STAINED_GLASS_PANE, Component.empty(), List.of());
         ItemStack[] contents = new ItemStack[GuiLayout.EDITOR_SIZE];
         Arrays.fill(contents, filler);
-        List<Integer> buttons = editorButtons(holder.kind());
+        List<BigDecimal> buttons = editorButtons(holder.kind());
         for (int i = 0; i < buttons.size(); i++) {
-            int value = buttons.get(i);
+            BigDecimal value = buttons.get(i);
             contents[GuiLayout.minusSlot(i)] = amountButton(Material.RED_STAINED_GLASS_PANE,
-                    m.component("gui.editor-minus", amount(value)), List.of(), value);
+                    m.component("gui.editor-minus", amount(show(holder, value))), List.of(), value);
             contents[GuiLayout.plusSlot(i)] = amountButton(Material.LIME_STAINED_GLASS_PANE,
-                    m.component("gui.editor-plus", amount(value)), List.of(), value);
+                    m.component("gui.editor-plus", amount(show(holder, value))), List.of(), value);
         }
-        contents[GuiLayout.EDITOR_CURRENT] = amountButton(Material.EXPERIENCE_BOTTLE,
-                m.component("gui.editor-current", amount(holder.draft())), List.of(), holder.draft());
+        contents[GuiLayout.EDITOR_CURRENT] = amountButton(icon,
+                m.component("gui.editor-current", amount(show(holder, holder.draft()))), List.of(),
+                money ? BigDecimal.ONE : holder.draft());
         contents[GuiLayout.EDITOR_BACK] = display.button(Material.ARROW, m.component("gui.editor-back"), List.of());
         // "Type an amount" (chat / Bedrock form) arrives in step 7; its slot stays filler until then.
         contents[GuiLayout.EDITOR_ZERO] = display.button(Material.BUCKET, m.component("gui.editor-zero"), List.of());
         contents[GuiLayout.EDITOR_MAX] = amountButton(Material.HOPPER,
-                m.component("gui.editor-max", amount(max)), List.of(), max);
+                m.component("gui.editor-max", amount(show(holder, max))), List.of(), money ? BigDecimal.ONE : max);
         contents[GuiLayout.EDITOR_DONE] = display.button(Material.LIME_DYE, m.component("gui.editor-done"), List.of());
         holder.getInventory().setContents(contents);
     }
 
+    private String show(EditorHolder holder, BigDecimal value) {
+        return holder.kind() == EditorHolder.Kind.MONEY ? formatMoney(value) : value.toPlainString();
+    }
+
     /** A button whose stack size shows {@code value} (1-64; 0 shows as 1). */
-    private ItemStack amountButton(Material material, Component name, List<Component> lore, long value) {
+    private ItemStack amountButton(Material material, Component name, List<Component> lore, BigDecimal value) {
         ItemStack item = display.button(material, name, lore);
-        item.setAmount((int) Math.max(1, Math.min(64, value)));
+        item.setAmount(value.max(BigDecimal.ONE).min(BigDecimal.valueOf(64)).intValue());
         return item;
+    }
+
+    private ItemStack amountButton(Material material, Component name, List<Component> lore, long value) {
+        return amountButton(material, name, lore, BigDecimal.valueOf(value));
     }
 
     private static TagResolver amount(long value) {
         return Placeholder.unparsed("amount", String.valueOf(value));
+    }
+
+    private static TagResolver amount(String value) {
+        return Placeholder.unparsed("amount", value);
     }
 
     private ItemStack head(Side side, Component name) {

@@ -19,9 +19,7 @@ import com.mrstudios.trades.trade.CompletionValidator.Result;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.GameMode;
@@ -58,22 +56,6 @@ class CompletionValidatorTest {
         Trader build() {
             return new Trader(id, online, dead, gameMode, bypassWorld, position, confirmed, level, storage, offered,
                     money, xp);
-        }
-    }
-
-    /** An economy with fixed balances. */
-    private static final class FakeEconomy implements EconomyPort {
-        boolean available = true;
-        final Map<UUID, BigDecimal> balances = new HashMap<>();
-
-        @Override
-        public boolean isAvailable() {
-            return available;
-        }
-
-        @Override
-        public boolean has(UUID player, BigDecimal amount) {
-            return balances.getOrDefault(player, BigDecimal.ZERO).compareTo(amount) >= 0;
         }
     }
 

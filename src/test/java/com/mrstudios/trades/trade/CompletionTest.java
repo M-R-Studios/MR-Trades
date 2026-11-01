@@ -295,7 +295,7 @@ class CompletionTest extends TradeFixture {
         click(alex, ClickType.LEFT, GuiLayout.plusSlot(3)); // +30
         click(alex, ClickType.LEFT, GuiLayout.plusSlot(1)); // +5
         click(alex, ClickType.LEFT, GuiLayout.minusSlot(0)); // -1
-        assertEquals(34, editor.draft());
+        assertEquals(34, editor.draft().intValueExact());
         assertEquals(0, session.a().offer().xpLevels(), "not offered until Done");
         assertEquals(0, session.version());
 
@@ -314,14 +314,14 @@ class CompletionTest extends TradeFixture {
         start();
         EditorHolder editor = openEditor();
         click(alex, ClickType.LEFT, GuiLayout.plusSlot(3));
-        assertEquals(12, editor.draft());
+        assertEquals(12, editor.draft().intValueExact());
         click(alex, ClickType.LEFT, GuiLayout.minusSlot(3));
         click(alex, ClickType.LEFT, GuiLayout.minusSlot(3));
-        assertEquals(0, editor.draft());
+        assertEquals(0, editor.draft().intValueExact());
         click(alex, ClickType.LEFT, GuiLayout.EDITOR_MAX);
-        assertEquals(12, editor.draft());
+        assertEquals(12, editor.draft().intValueExact());
         click(alex, ClickType.LEFT, GuiLayout.EDITOR_ZERO);
-        assertEquals(0, editor.draft());
+        assertEquals(0, editor.draft().intValueExact());
     }
 
     @Test

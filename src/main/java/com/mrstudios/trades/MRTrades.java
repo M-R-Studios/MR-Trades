@@ -16,6 +16,7 @@ import com.mrstudios.trades.request.RequestToggle;
 import com.mrstudios.trades.gui.DisplayItems;
 import com.mrstudios.trades.gui.TradeView;
 import com.mrstudios.trades.listener.DisplayGuardListener;
+import com.mrstudios.trades.listener.EconomyListener;
 import com.mrstudios.trades.listener.GuiListener;
 import com.mrstudios.trades.returns.EscrowStore;
 import com.mrstudios.trades.returns.ReturnService;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
 import org.bukkit.Bukkit;
@@ -83,20 +85,19 @@ public class MRTrades extends JavaPlugin {
             getLogger().severe("messages.yml could not be loaded, using the built-in defaults: " + files.messages.error());
         }
 
-        hooks = new Hooks(getServer().getPluginManager());
+        hooks = new Hooks(getServer());
         requests = new RequestService(this, new RequestManager(System::currentTimeMillis),
                 new CooldownTracker(System::currentTimeMillis), new RequestToggle(), registry);
         returns = new ReturnService(this, new EscrowStore(this));
         DisplayItems display = new DisplayItems();
-        TradeView view = new TradeView(() -> state.messages(), display, () -> state.settings(), id -> {
-            Player player = getServer().getPlayer(id);
-            return player != null && player.hasPermission("mrtrades.xp");
-        });
-        trades = new TradeService(this, registry, returns, view, display);
+        TradeView view = new TradeView(() -> state.messages(), display, () -> state.settings(), hooks::economy,
+                id -> hasPermission(id, "mrtrades.xp"), id -> hasPermission(id, "mrtrades.money"));
+        trades = new TradeService(this, registry, returns, view, display, hooks::economy);
         requests.setTradeService(trades);
         getServer().getPluginManager().registerEvents(new GuiListener(this, trades), this);
         getServer().getPluginManager().registerEvents(new LifecycleListener(this, trades, requests, returns), this);
         getServer().getPluginManager().registerEvents(new DisplayGuardListener(display, getLogger()), this);
+        getServer().getPluginManager().registerEvents(new EconomyListener(this, trades), this);
         getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
         trades.startTasks();
 
@@ -132,6 +133,11 @@ public class MRTrades extends JavaPlugin {
 
     public RequestService requests() {
         return requests;
+    }
+
+    private boolean hasPermission(UUID id, String permission) {
+        Player player = getServer().getPlayer(id);
+        return player != null && player.hasPermission(permission);
     }
 
     public ReturnService returnsService() {

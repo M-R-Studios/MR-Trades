@@ -8,6 +8,7 @@ import com.mrstudios.trades.gui.DisplayItems;
 import com.mrstudios.trades.gui.EditorHolder;
 import com.mrstudios.trades.gui.TradeHolder;
 import com.mrstudios.trades.gui.TradeView;
+import com.mrstudios.trades.hook.EconomyPort;
 import com.mrstudios.trades.returns.PlayerStorage;
 import com.mrstudios.trades.returns.ReturnService;
 import com.mrstudios.trades.rules.ClickAction;
@@ -15,12 +16,14 @@ import com.mrstudios.trades.rules.LimitsCheck;
 import com.mrstudios.trades.rules.LimitsCheck.Position;
 import com.mrstudios.trades.trade.TradeSession.ChangeResult;
 import com.mrstudios.trades.trade.TradeSession.ConfirmResult;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -50,17 +53,19 @@ public final class TradeService {
     private final DisplayItems display;
     /** Items whose owner was somehow offline when returned; queued for them on join. Should stay empty. */
     private final Map<UUID, List<ItemStack>> orphans = new HashMap<>();
+    private final Supplier<EconomyPort> economy;
     private BukkitTask limitsTask;
     private BukkitTask watchdogTask;
     private boolean shuttingDown;
 
     public TradeService(MRTrades plugin, TradeRegistry registry, ReturnService returns, TradeView view,
-            DisplayItems display) {
+            DisplayItems display, Supplier<EconomyPort> economy) {
         this.plugin = plugin;
         this.registry = registry;
         this.returns = returns;
         this.view = view;
         this.display = display;
+        this.economy = economy;
     }
 
     public TradeRegistry registry() {
@@ -74,6 +79,11 @@ public final class TradeService {
     /** Whether {@code side}'s XP button is shown and works. */
     public boolean xpShown(Side side) {
         return view.xpShown(side);
+    }
+
+    /** Whether {@code side}'s money button is shown and works. */
+    public boolean moneyShown(Side side) {
+        return view.moneyShown(side);
     }
 
     public int editorButtonCount(EditorHolder editor) {
@@ -274,6 +284,16 @@ public final class TradeService {
             return;
         }
 
+        // 4. Money: only the net difference moves; a failed deposit is refunded.
+        if (session.a().offer().money().signum() != 0 || session.b().offer().money().signum() != 0) {
+            MoneyTransfer.Result paid = MoneyTransfer.transfer(economy.get(), session.a().playerId(),
+                    session.a().offer().money(), session.b().playerId(), session.b().offer().money());
+            if (!paid.ok()) {
+                moneyFailed(session, paid);
+                return;
+            }
+        }
+
         boolean itemsTaken = false;
         try {
             // 5. XP: whole levels; checked above, so it can't fail.
@@ -341,6 +361,72 @@ public final class TradeService {
         }
     }
 
+    /**
+     * The economy refused or failed. Nothing else has happened yet (XP and items come after), so
+     * the trade goes back to OPEN like any failed check. If even the refund failed, the payer lost
+     * the amount: that's logged loudly and both players are told to contact staff.
+     */
+    private void moneyFailed(TradeSession session, MoneyTransfer.Result paid) {
+        Side payer = paid.payer() == null ? null : session.side(paid.payer());
+        String payerName = payer == null ? "" : payer.name();
+        if (paid.status() == MoneyTransfer.Status.ECONOMY_ERROR) {
+            Side payee = session.side(paid.payee());
+            plugin.getLogger().severe("Economy error in trade " + session.id() + ": " + paymentText(paid, payerName,
+                    payee == null ? "?" : payee.name()) + " was withdrawn, but neither the deposit nor the refund"
+                    + " worked (" + paid.errors() + "). The payer must be refunded by hand.");
+        } else {
+            plugin.getLogger().warning("Trade " + session.id() + ": the economy refused to move "
+                    + paid.amount().toPlainString() + " (" + paid.errors() + "); nothing was moved.");
+        }
+        session.completionFailed();
+        for (Side side : List.of(session.a(), session.b())) {
+            Player player = player(side);
+            if (player == null) {
+                continue;
+            }
+            if (paid.status() == MoneyTransfer.Status.ECONOMY_ERROR) {
+                messages().send(player, "economy-error", Placeholder.unparsed("id", session.id().toString()));
+            } else {
+                messages().send(player, "complete-failed-money", Placeholder.unparsed("player", payerName));
+            }
+        }
+        render(session);
+    }
+
+    private static String paymentText(MoneyTransfer.Result paid, String payer, String payee) {
+        return paid.amount().toPlainString() + " from " + payer + " to " + payee;
+    }
+
+    /**
+     * DESIGN.md 3.5 #17: the economy went away. Every money offer is set to 0 (an offer change, so
+     * both confirmations reset) and both players are told.
+     */
+    public void economyCheck() {
+        if (shuttingDown || view.moneyAvailable()) {
+            return;
+        }
+        for (TradeSession session : registry.sessions()) {
+            if (!session.acceptsChanges()) {
+                continue;
+            }
+            boolean changed = false;
+            for (Side side : List.of(session.a(), session.b())) {
+                if (session.setMoney(side, 0, BigDecimal.ZERO) == TradeSession.ChangeResult.CHANGED) {
+                    changed = true;
+                }
+            }
+            if (changed) {
+                for (Side side : List.of(session.a(), session.b())) {
+                    Player player = player(side);
+                    if (player != null) {
+                        messages().send(player, "economy-unavailable");
+                    }
+                }
+                render(session);
+            }
+        }
+    }
+
     /** Step 3: a failed check either keeps the trade open (confirm again) or ends it. */
     private void completionRefused(TradeSession session, CompletionValidator.Result check) {
         UUID who = check.player();
@@ -380,7 +466,7 @@ public final class TradeService {
         boolean bypassDistance = a != null && a.hasPermission(BYPASS_DISTANCE)
                 || b != null && b.hasPermission(BYPASS_DISTANCE);
         return new CompletionSnapshot(session.version(), trader(session.a(), a), trader(session.b(), b),
-                settings().limits(), bypassDistance, null,
+                settings().limits(), bypassDistance, economy.get(),
                 a != null ? a.getInventory().getMaxStackSize() : 64);
     }
 
@@ -398,9 +484,40 @@ public final class TradeService {
 
     // --- XP editor ---
 
-    /** The XP button: clears your own confirmation and swaps the window for the editor next tick. */
+    /** The XP button: opens the XP editor. */
     public void openXpEditor(Player player, TradeSession session, Side side) {
-        if (!session.acceptsChanges() || !view.xpShown(side)) {
+        openEditor(player, session, side, EditorHolder.Kind.XP);
+    }
+
+    /** The money button: opens the money editor. */
+    public void openMoneyEditor(Player player, TradeSession session, Side side) {
+        openEditor(player, session, side, EditorHolder.Kind.MONEY);
+    }
+
+    /** The most {@code player} can offer of this kind right now: their level, or their balance capped by money.max-amount. */
+    private BigDecimal editorMax(Player player, EditorHolder.Kind kind) {
+        if (kind == EditorHolder.Kind.XP) {
+            return BigDecimal.valueOf(player.getLevel());
+        }
+        EconomyPort port = economy.get();
+        if (port == null || !port.isAvailable()) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal max;
+        try {
+            max = MoneyTransfer.round(port.balance(player.getUniqueId()).max(BigDecimal.ZERO), port.fractionalDigits());
+        } catch (RuntimeException e) {
+            plugin.getLogger().log(Level.WARNING, "Couldn't read " + player.getName() + "'s balance", e);
+            return BigDecimal.ZERO;
+        }
+        BigDecimal cap = settings().money().maxAmount();
+        return cap.signum() > 0 ? max.min(cap) : max;
+    }
+
+    /** Clears your own confirmation and swaps the window for the editor next tick. */
+    private void openEditor(Player player, TradeSession session, Side side, EditorHolder.Kind kind) {
+        boolean shown = kind == EditorHolder.Kind.XP ? view.xpShown(side) : view.moneyShown(side);
+        if (!session.acceptsChanges() || !shown) {
             return;
         }
         session.clearConfirmation(side);
@@ -411,7 +528,7 @@ public final class TradeService {
             if (session.isEnded() || !player.isOnline()) {
                 return;
             }
-            player.openInventory(view.createEditor(session, side, player.getLevel()).getInventory());
+            player.openInventory(view.createEditor(session, side, kind, editorMax(player, kind)).getInventory());
             side.setView(ViewState.EDITOR);
         });
     }
@@ -423,18 +540,21 @@ public final class TradeService {
         if (session.isEnded()) {
             return;
         }
-        long max = player.getLevel();
-        List<Integer> buttons = view.editorButtons(editor.kind());
-        long draft = editor.draft();
+        BigDecimal max = editorMax(player, editor.kind());
+        List<BigDecimal> buttons = view.editorButtons(editor.kind());
+        BigDecimal draft = editor.draft();
         switch (press.button()) {
-            case EDITOR_MINUS -> draft -= buttons.get(press.index());
-            case EDITOR_PLUS -> draft += buttons.get(press.index());
-            case EDITOR_ZERO -> draft = 0;
+            case EDITOR_MINUS -> draft = draft.subtract(buttons.get(press.index()));
+            case EDITOR_PLUS -> draft = draft.add(buttons.get(press.index()));
+            case EDITOR_ZERO -> draft = BigDecimal.ZERO;
             case EDITOR_MAX -> draft = max;
             case EDITOR_DONE -> {
-                int levels = (int) Math.max(0, Math.min(max, draft));
-                if (session.setXpLevels(side, settings().trade().changeLockMs(), levels)
-                        == TradeSession.ChangeResult.CHANGED) {
+                BigDecimal amount = draft.max(BigDecimal.ZERO).min(max);
+                long lockMs = settings().trade().changeLockMs();
+                TradeSession.ChangeResult result = editor.kind() == EditorHolder.Kind.XP
+                        ? session.setXpLevels(side, lockMs, amount.intValue())
+                        : session.setMoney(side, lockMs, moneyAmount(amount));
+                if (result == TradeSession.ChangeResult.CHANGED) {
                     offerChanged(session, side);
                 }
                 reopenTrade(player, session, side);
@@ -448,8 +568,16 @@ public final class TradeService {
                 return; // "Type an amount" arrives in step 7.
             }
         }
-        editor.setDraft(Math.max(0, Math.min(max, draft)));
+        editor.setDraft(draft.max(BigDecimal.ZERO).min(max));
         view.renderEditor(editor, max);
+    }
+
+    /** A money amount rounded down to the economy's decimals, without trailing zeros noise. */
+    private BigDecimal moneyAmount(BigDecimal amount) {
+        EconomyPort port = economy.get();
+        int digits = port == null ? -1 : port.fractionalDigits();
+        BigDecimal rounded = MoneyTransfer.round(amount, digits);
+        return rounded.signum() == 0 ? BigDecimal.ZERO : rounded;
     }
 
     /** Esc in the editor discards the draft and goes back to the trade window; it doesn't end the trade. */
@@ -704,7 +832,7 @@ public final class TradeService {
             }
             EditorHolder editor = EditorHolder.of(top);
             if (editor != null && editor.session() == session) {
-                view.renderEditor(editor, player.getLevel());
+                view.renderEditor(editor, editorMax(player, editor.kind()));
             }
         }
     }

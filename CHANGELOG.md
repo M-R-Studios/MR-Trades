@@ -20,3 +20,7 @@
 - If the swap can't happen because a player has no room for what they'd receive or not enough XP levels any more, the trade stays open, nothing moves, and both players are told why and can confirm again.
 - XP levels in trades: click the XP bottle to open an editor with +/- buttons (`xp.buttons`), "Set to 0" and "Offer all". Needs `mrtrades.xp`. The other player's XP offer is shown on their side.
 - Both players are saved right after a completed trade, so a crash right afterwards can't undo it for one of them.
+- Money in trades through Vault: click the gold ingot to open a money editor with +/- buttons (`money.buttons`), "Set to 0" and "Offer all" (your balance, capped by `money.max-amount`). Needs `mrtrades.money`. Amounts use your economy's own format and decimals.
+- Only the difference changes hands (if you offer 100 and they offer 30, you pay 70). If the economy refuses or fails during the swap, the payment is undone, nothing else moves and the trade stays open; if even undoing it fails, both players get the trade id to give staff and the console logs exactly who is owed what.
+- If the economy plugin stops during a trade, money offers are set to 0 and both players are told. Without Vault, the money buttons are hidden and everything else works as before.
+- `/mrtrades version` shows the economy plugin behind Vault.
