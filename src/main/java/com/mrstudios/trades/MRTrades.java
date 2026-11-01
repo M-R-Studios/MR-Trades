@@ -9,6 +9,7 @@ import com.mrstudios.trades.config.Settings;
 import com.mrstudios.trades.config.SettingsLoader;
 import com.mrstudios.trades.hook.Hooks;
 import com.mrstudios.trades.listener.LifecycleListener;
+import com.mrstudios.trades.listener.RequestListener;
 import com.mrstudios.trades.request.CooldownTracker;
 import com.mrstudios.trades.request.RequestManager;
 import com.mrstudios.trades.request.RequestService;
@@ -102,6 +103,8 @@ public class MRTrades extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new DisplayGuardListener(display, getLogger()), this);
         getServer().getPluginManager().registerEvents(new EconomyListener(this, trades), this);
         getServer().getPluginManager().registerEvents(new ChatListener(this, chatInput, trades), this);
+        getServer().getPluginManager().registerEvents(
+                new RequestListener(this, requests, System::currentTimeMillis), this);
         getServer().getScheduler().runTaskTimer(this, requests::expireTick, 20L, 20L);
         trades.startTasks();
 

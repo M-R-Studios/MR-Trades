@@ -76,6 +76,19 @@ public final class RequestService {
             messages().send(sender, "target-offline", Placeholder.unparsed("player", targetName));
             return;
         }
+        send(sender, target);
+    }
+
+    /**
+     * Requests a trade with {@code target}, or accepts their request if they already sent one.
+     * Used by {@code /trade <name>} and by sneak-right-click, which passes the clicked player
+     * directly, so even players named like a subcommand ({@code accept}...) can be requested.
+     */
+    public void send(Player sender, Player target) {
+        if (!sender.canSee(target)) {
+            messages().send(sender, "target-offline", Placeholder.unparsed("player", target.getName()));
+            return;
+        }
         if (target.equals(sender)) {
             messages().send(sender, "target-self");
             return;
